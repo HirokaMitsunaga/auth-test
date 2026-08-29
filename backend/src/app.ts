@@ -2,6 +2,8 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { swaggerUI } from '@hono/swagger-ui';
 import type { PrismaClient } from '@prisma/client';
 
+import { createAuthRoute } from './auth/controller/http/auth.route.js';
+import { createBetterAuth } from './auth/infra/better-auth/better-auth-config.js';
 import { createTodoCommandApp } from './command/controller/http/todo/todo-command.route.js';
 import { createUserApp } from './command/controller/http/user/user.route.js';
 import { createTodoQueryApp } from './query/controller/http/todo/todo-query.route.js';
@@ -29,6 +31,8 @@ export const createApp = (db: Pick<PrismaClient, 'todo' | 'user'>) => {
     servers: [{ url: 'http://localhost:3000' }],
   });
   app.get('/docs', swaggerUI({ url: '/openapi.json' }));
+
+  app.route('/auth', createAuthRoute(createBetterAuth()));
 
   const todoCommandApp = createTodoCommandApp({ prisma: db });
   const todoQueryApp = createTodoQueryApp({ prisma: db });

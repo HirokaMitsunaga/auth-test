@@ -21,6 +21,7 @@
     "@hono/zod-openapi": "^1.5.1",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "better-auth": "1.7.2",
     "hono": "^4.12.31",
     "ulid": "^3.0.2",
     "zod": "^4.4.3"
