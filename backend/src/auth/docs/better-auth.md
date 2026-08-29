@@ -30,16 +30,16 @@ Better Auth 公式には通常版の Hono 統合ドキュメントと、別URL�
 
 ## Better Auth とアプリケーションの責務分担
 
-| 領域 | Better Auth に任せる処理 | アプリケーション側で決める処理 |
-| --- | --- | --- |
-| OAuth/OIDC | 認可 URL、state、PKCE、nonce、コールバック、トークン交換 | 利用する provider と設定値の管理 |
-| ID トークン | issuer、audience、署名、期限、nonce などの検証 | 検証済みユーザー情報を業務でどう利用するか |
-| 外部 ID | issuer と accountId による identity の保存 | email だけでの自動リンクを禁止するか |
-| ユーザー | Better Auth User の作成・更新 | 表示名・プロフィール・退会などの業務ルール |
-| セッション | セッション発行、Cookie、取得、失効 | アプリ API での認証必須範囲と認可 |
-| DB | user、account、session、verification の永続化 | Todo などのドメインテーブルと外部キー |
-| 競合 | ユーザー・アカウント作成のトランザクション | 一意制約競合時に再取得してログイン継続できるか |
-| 秘密情報 | 秘密値を使用した認証処理 | 秘密値の注入、ローテーション、ログへの出力禁止 |
+| 領域        | Better Auth に任せる処理                                 | アプリケーション側で決める処理                 |
+| ----------- | -------------------------------------------------------- | ---------------------------------------------- |
+| OAuth/OIDC  | 認可 URL、state、PKCE、nonce、コールバック、トークン交換 | 利用する provider と設定値の管理               |
+| ID トークン | issuer、audience、署名、期限、nonce などの検証           | 検証済みユーザー情報を業務でどう利用するか     |
+| 外部 ID     | issuer と accountId による identity の保存               | email だけでの自動リンクを禁止するか           |
+| ユーザー    | Better Auth User の作成・更新                            | 表示名・プロフィール・退会などの業務ルール     |
+| セッション  | セッション発行、Cookie、取得、失効                       | アプリ API での認証必須範囲と認可              |
+| DB          | user、account、session、verification の永続化            | Todo などのドメインテーブルと外部キー          |
+| 競合        | ユーザー・アカウント作成のトランザクション               | 一意制約競合時に再取得してログイン継続できるか |
+| 秘密情報    | 秘密値を使用した認証処理                                 | 秘密値の注入、ローテーション、ログへの出力禁止 |
 
 state や PKCE をアプリケーションのコールバックルートで再実装しない。Better Auth の内部仕様に依存する処理を独自実装すると、検証済みの状態を二重に管理して不整合を起こすためである。
 
@@ -64,7 +64,6 @@ Better Auth 固有の設定と、アプリケーション固有の認証利用�
     │       ├── better-auth-session-reader.ts
     │       └── hooks/
     │           ├── account-token-policy.ts
-    │           └── user-policy.ts
     ├── integration-test/
     │   ├── better-auth-flow.test.ts
     │   ├── account-linking.test.ts
@@ -124,9 +123,9 @@ command のドメイン層から Prisma の account や session を直接検索�
 - PrismaClient や Better Auth の型を引数・戻り値にしない。
 - 現在は IAuthHandler と IAuthSessionReader を定義する。AuthenticatedUser もこの port の契約として定義する。
 
-    export interface IAuthHandler {
-      handle(request: Request): Promise<Response>;
-    }
+  export interface IAuthHandler {
+  handle(request: Request): Promise<Response>;
+  }
 
 Better Auth が所有する user、account、session、verification については、現時点でアプリケーション独自の repository interface を作成しない。Better Auth の API と Prisma adapter が読み書きを担当するため、アプリケーションが直接 DB 操作を必要とするユースケースが発生した時だけ、そのユースケースに必要な最小の port を追加する。
 
@@ -444,23 +443,23 @@ clientSecret や JWKS の鍵をローテーションする場合、古いログ�
 
 セッション Cookie は次の属性に固定する。
 
-| 属性 | 値 |
-| --- | --- |
-| Name | __Host-session |
-| Path | / |
-| Domain | 設定しない |
-| Secure | 常に有効。本番と HTTPS の検証環境で使用 |
-| HttpOnly | 有効 |
-| SameSite | Lax |
-| Max-Age | Better Auth のセッション有効期限と一致 |
+| 属性     | 値                                      |
+| -------- | --------------------------------------- |
+| Name     | \_\_Host-session                        |
+| Path     | /                                       |
+| Domain   | 設定しない                              |
+| Secure   | 常に有効。本番と HTTPS の検証環境で使用 |
+| HttpOnly | 有効                                    |
+| SameSite | Lax                                     |
+| Max-Age  | Better Auth のセッション有効期限と一致  |
 
-__Host- プレフィックスを使用するため、Domain を設定せず、Path を / とする。Better Auth の Cookie 設定 API でこの名前と属性を明示する。設定 API の実際のキー名は採用バージョンの型定義に合わせ、デフォルト値に依存しない。
+\_\_Host- プレフィックスを使用するため、Domain を設定せず、Path を / とする。Better Auth の Cookie 設定 API でこの名前と属性を明示する。設定 API の実際のキー名は採用バージョンの型定義に合わせ、デフォルト値に依存しない。
 
 HTTP のローカル開発環境では Secure Cookie が送信されないため、開発環境を HTTP のままにする場合は、開発専用の Cookie 設定を明示する。本番設定の Secure を無効化することで動作確認しない。可能ならローカルも HTTPS とする。
 
 ### state 検証用 Cookie
 
-state、PKCE、nonce を保持する検証用 Cookie は Better Auth が管理する。Better Auth の状態保存を利用するため、アプリケーションが独自に __Host-auth-flow を発行しない。
+state、PKCE、nonce を保持する検証用 Cookie は Better Auth が管理する。Better Auth の状態保存を利用するため、アプリケーションが独自に \_\_Host-auth-flow を発行しない。
 
 state 用 Cookie についても、採用バージョンで次の条件を確認する。
 
@@ -488,12 +487,12 @@ Better Auth のデフォルト属性を採用する場合でも、生成され�
 
 今回の構成では、Better Auth のプラグインで追加の認証機能を有効化しない。Better Auth の core schema として、次の4テーブルを使用する。
 
-| テーブル | 所有者 | 生成・反映 | 用途 |
-| --- | --- | --- | --- |
-| user | Better Auth | Better Auth CLI が Prisma schema を生成し、Prisma migration で反映 | アプリケーションユーザー |
-| account | Better Auth | 同上 | LINE / Google などの外部 identity |
-| session | Better Auth | 同上 | アプリケーションのログインセッション |
-| verification | Better Auth | 同上 | OAuth state などの一時的な検証情報 |
+| テーブル     | 所有者      | 生成・反映                                                         | 用途                                 |
+| ------------ | ----------- | ------------------------------------------------------------------ | ------------------------------------ |
+| user         | Better Auth | Better Auth CLI が Prisma schema を生成し、Prisma migration で反映 | アプリケーションユーザー             |
+| account      | Better Auth | 同上                                                               | LINE / Google などの外部 identity    |
+| session      | Better Auth | 同上                                                               | アプリケーションのログインセッション |
+| verification | Better Auth | 同上                                                               | OAuth state などの一時的な検証情報   |
 
 ここでいう「自動生成」は、Better Auth が Prisma のモデル定義を生成することを指す。Prisma adapter を使う場合、生成された schema を確認したうえで、このリポジトリの Prisma migration を作成して DB にテーブルを作る。Better Auth の schema 生成だけで本番 DB にテーブルが自動作成されるわけではない。
 
@@ -505,34 +504,34 @@ Better Auth の論理モデルは次のテーブルを基本とする。実際�
 
 #### user
 
-| カラム | 用途 |
-| --- | --- |
-| id | アプリケーション全体で不変なユーザー ID |
-| name | Better Auth の表示名 |
-| email | provider から取得した email。ログイン ID の代替にしない |
-| emailVerified | Better Auth が扱う email の検証状態 |
-| image | provider 由来の画像。業務データの正本にしない |
-| createdAt | 作成日時 |
-| updatedAt | 更新日時 |
+| カラム        | 用途                                                    |
+| ------------- | ------------------------------------------------------- |
+| id            | アプリケーション全体で不変なユーザー ID                 |
+| name          | Better Auth の表示名                                    |
+| email         | provider から取得した email。ログイン ID の代替にしない |
+| emailVerified | Better Auth が扱う email の検証状態                     |
+| image         | provider 由来の画像。業務データの正本にしない           |
+| createdAt     | 作成日時                                                |
+| updatedAt     | 更新日時                                                |
 
 パスワードログインを有効にしないため、パスワードを必須カラムとする既存 User スキーマはそのまま使えない。既存の User を Better Auth の user に対応させる場合は、後述の移行を行う。
 
 #### account
 
-| カラム | 用途 |
-| --- | --- |
-| id | account レコードの ID |
-| accountId | provider 内の subject などの外部 ID |
-| providerId | line、google などの固定 provider ID |
-| userId | Better Auth user.id |
-| issuer | OIDC issuer。provider 実装が保持する場合に使用 |
-| accessToken | provider API にアクセスするための認可用 token。本構成では保存しないため常に NULL |
-| refreshToken | provider API の認可を継続するための token。本構成では保存しないため常に NULL |
-| idToken | callback 中の認証検証に使う一時値。検証後は保存しないため常に NULL |
-| accessTokenExpiresAt | 保存する access token の期限。本構成では常に NULL |
-| refreshTokenExpiresAt | 保存する refresh token の期限。本構成では常に NULL |
-| scope | provider API に対する認可範囲。本構成では account に保存しない |
-| createdAt / updatedAt | 管理日時 |
+| カラム                | 用途                                                                             |
+| --------------------- | -------------------------------------------------------------------------------- |
+| id                    | account レコードの ID                                                            |
+| accountId             | provider 内の subject などの外部 ID                                              |
+| providerId            | line、google などの固定 provider ID                                              |
+| userId                | Better Auth user.id                                                              |
+| issuer                | OIDC issuer。provider 実装が保持する場合に使用                                   |
+| accessToken           | provider API にアクセスするための認可用 token。本構成では保存しないため常に NULL |
+| refreshToken          | provider API の認可を継続するための token。本構成では保存しないため常に NULL     |
+| idToken               | callback 中の認証検証に使う一時値。検証後は保存しないため常に NULL               |
+| accessTokenExpiresAt  | 保存する access token の期限。本構成では常に NULL                                |
+| refreshTokenExpiresAt | 保存する refresh token の期限。本構成では常に NULL                               |
+| scope                 | provider API に対する認可範囲。本構成では account に保存しない                   |
+| createdAt / updatedAt | 管理日時                                                                         |
 
 Better Auth の provider identity は issuer と accountId の組み合わせで一意に扱う。providerId は利用した provider 設定を表す値であり、OIDC では検証済み issuer が identity の名前空間になる。
 
@@ -549,15 +548,15 @@ Better Auth の provider identity は issuer と accountId の組み合わせで
 
 #### session
 
-| カラム | 用途 |
-| --- | --- |
-| id | session レコードの ID |
-| token | Cookie のセッション値に対応する値。DB 側で必要なハッシュ化は採用版の仕様に従う |
-| userId | Better Auth user.id |
-| expiresAt | セッション期限 |
-| ipAddress | 採用する場合のみ。ログ・個人情報方針に従う |
-| userAgent | 採用する場合のみ。ログ・個人情報方針に従う |
-| createdAt / updatedAt | 管理日時 |
+| カラム                | 用途                                                                           |
+| --------------------- | ------------------------------------------------------------------------------ |
+| id                    | session レコードの ID                                                          |
+| token                 | Cookie のセッション値に対応する値。DB 側で必要なハッシュ化は採用版の仕様に従う |
+| userId                | Better Auth user.id                                                            |
+| expiresAt             | セッション期限                                                                 |
+| ipAddress             | 採用する場合のみ。ログ・個人情報方針に従う                                     |
+| userAgent             | 採用する場合のみ。ログ・個人情報方針に従う                                     |
+| createdAt / updatedAt | 管理日時                                                                       |
 
 session はアプリケーションのログイン状態だけを表す。provider の access token や ID token を session に詰めない。
 
@@ -575,15 +574,15 @@ Todo.userId は Better Auth の user.id を参照する。
 
 認証以外でこのリポジトリが独自に作成・管理するテーブルは、現在のところ Todo だけである。Todo は Better Auth の認証処理から直接作成せず、認証済み user.id を所有者としてアプリケーションのユースケースから操作する。
 
-| カラム | 型 | 制約・用途 |
-| --- | --- | --- |
-| id | String | 主キー |
-| title | String | Todo のタイトル |
-| status | TodoStatus | PENDING、IN_PROGRESS、COMPLETED のいずれか |
-| priority | Int | 優先度 |
-| userId | String | Better Auth の user.id への外部キー |
-| createdAt | DateTime | 作成日時 |
-| updatedAt | DateTime | 更新日時 |
+| カラム    | 型         | 制約・用途                                 |
+| --------- | ---------- | ------------------------------------------ |
+| id        | String     | 主キー                                     |
+| title     | String     | Todo のタイトル                            |
+| status    | TodoStatus | PENDING、IN_PROGRESS、COMPLETED のいずれか |
+| priority  | Int        | 優先度                                     |
+| userId    | String     | Better Auth の user.id への外部キー        |
+| createdAt | DateTime   | 作成日時                                   |
+| updatedAt | DateTime   | 更新日時                                   |
 
 インデックスは userId と id の複合インデックスを作成する。Todo の取得・更新・削除では、session から得た user.id を userId の検索条件に含め、他ユーザーの Todo を操作できないようにする。
 
@@ -966,7 +965,7 @@ Todo の取得・更新・削除では、ID だけを指定して取得した後
 
 ### Cookie とセッション
 
-- [ ] session Cookie 名を __Host-session に固定した
+- [ ] session Cookie 名を \_\_Host-session に固定した
 - [ ] Path=/、Secure、HttpOnly、SameSite=Lax を固定した
 - [ ] Domain を設定していない
 - [ ] Cookie の有効期限と DB session の期限を一致させた
