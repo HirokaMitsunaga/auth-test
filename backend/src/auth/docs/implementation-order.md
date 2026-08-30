@@ -9,21 +9,21 @@ Better Auth を使った認証を、責務ごとに分割して実装するた�
 
 ## 前提
 
-- 認証は Better Auth に委譲する。アプリケーション固有の domain、usecase、composition は auth 配下には作らない。
+- 認証のプロトコル処理は Better Auth に委譲する。auth/domain は作らないが、アプリケーション固有の処理をオーケストレーションする auth/usecase は作成する。
 - auth の port にはアプリケーションが必要とする IF と DTO だけを定義し、Prisma や Better Auth の型を公開しない。
 - Better Auth と Prisma の接続、スキーマ、フックは infra/better-auth に閉じ込める。
-- 依存性の注入と実装の組み立ては、既存の command と同様に controller/http/auth.route.ts で行う。
+- route、controller、usecase は具体的な認証実装に依存しない。依存性の注入と実装の組み立ては src/index.ts を composition root として行う。composition 専用ディレクトリは作成しない。
 - 今回は認証だけを扱う。LINE/Google のアクセストークンを使ったプロバイダー API 呼び出し（認可）は実装しない。
 - Better Auth のバージョンと Prisma アダプターの API は、実装開始時に固定して確認する。公式ドキュメントの生成手順や現在の API と差分がある場合は、採用するバージョンの仕様を優先する。
-- 既存の User テーブルは password を持つアプリケーション用ユーザーとして設計されているため、Better Auth の user テーブルとの統合方針を先に決める。既存データを残す必要がある場合は、移行を分けて実施する。
+- 既存の User テーブルは変更しない。Better Auth の論理モデル user は物理テーブル AuthUser として分離し、Todo との接続は認証ユーザー連携の単位で移行方法を決める。
 
 ## 全体の順番
 
 | 順番 | 実装単位 | 主な成果物 | 完了条件 |
 | --- | --- | --- | --- |
 | 1 | 最小構成の疎通とバージョン固定 | Better Auth の最小設定、バージョン方針 | 認証インスタンスを起動でき、採用バージョンとアダプター API が確定している |
-| 2 | 認証スキーマと DB マイグレーション | user / account / session / verification | 空の DB と既存 DB の両方でスキーマを適用できる |
-| 3 | auth の port・infra・controller の骨格 | port、Better Auth アダプター、HTTP ルート | DB 依存を port に漏らさず、セッション取得まで動作する |
+| 2 | 認証スキーマと DB マイグレーション | AuthUser / AuthAccount / AuthSession / AuthVerification | 既存 User/Todo を変更せず、空の DB と既存 DB の両方でスキーマを適用できる |
+| 3 | auth の port・infra・usecase・controller の骨格 | port、Better Auth アダプター、usecase、HTTP ルート | DB 依存を port/usecase/controller に漏らさず、認証処理とセッション取得まで動作する |
 | 4 | Cookie とトークンのセキュリティポリシー | Cookie 固定、account トークンポリシー | 属性と保存禁止項目をテストで固定できている |
 | 5 | LINE のログインを縦に実装 | LINE 設定、コールバック、関連テスト | 初回ログイン、再ログイン、ログアウトが動作する |
 | 6 | Todo への認証ユーザー連携 | 認証ミドルウェア、command/query の利用変更 | リクエスト由来の userId に依存せず、セッションユーザーで認可できる |
@@ -52,18 +52,18 @@ Better Auth を使った認証を、責務ごとに分割して実装するた�
 
 ## 2. 認証スキーマと DB マイグレーション
 
-最小構成で確認したスキーマを Prisma schema に反映し、データベース変更を先に確定する。Better Auth が標準で利用する認証用テーブルは次の 4 つである。
+最小構成で確認したスキーマを Prisma schema に反映し、データベース変更を先に確定する。Better Auth が標準で利用する論理テーブルは次の 4 つであり、物理テーブル名には Auth プレフィックスを付ける。
 
-- user: Better Auth が管理するユーザー
-- account: LINE/Google などの外部プロバイダーとの紐付け
-- session: ログインセッション
-- verification: 認証フローで使う一時的な検証情報
+- AuthUser: Better Auth の user
+- AuthAccount: LINE/Google などの外部プロバイダーとの紐付け
+- AuthSession: ログインセッション
+- AuthVerification: 認証フローで使う一時的な検証情報
 
 実施内容:
 
 - Better Auth のスキーマ生成結果を採用バージョンに合わせて取り込む。
-- 既存 User テーブルとの統合、改名、または段階移行の方針を決める。
-- Todo.userId が最終的に Better Auth user.id を参照するように、外部キーと既存データの移行方法を定義する。
+- Better Auth の modelName を AuthUser、AuthAccount、AuthSession、AuthVerification に固定する。
+- 既存 User テーブルと Todo は変更せず、AuthUser と Todo の接続方法は Unit 6 の移行設計へ分離する。
 - account の accessToken、refreshToken、idToken は今回の認証では利用しないため、保存しない方針をスキーマ・フック・テストで確認できるようにする。
 - 空の DB に適用するマイグレーションと、既存 DB に適用するデータ移行を分けて確認する。
 
@@ -71,10 +71,10 @@ Better Auth を使った認証を、責務ごとに分割して実装するた�
 
 - Prisma Client を生成できる。
 - 空の DB へマイグレーションを適用できる。
-- 既存 User/Todo データを壊さずに移行できる手順がある。
-- user、account、session、verification の制約とインデックスが設計書と一致している。
+- 既存 User/Todo データを変更せずに適用できる。
+- AuthUser、AuthAccount、AuthSession、AuthVerification の制約とインデックスが設計書と一致している。
 
-## 3. auth の port・infra・controller の骨格
+## 3. auth の port・infra・usecase・controller の骨格
 
 DB や Better Auth への依存を閉じ込めるため、先に境界を作る。auth は外部認証機能の利用であり、このシステム固有の業務 domain ではないため、auth/domain は作らない。
 
@@ -82,26 +82,39 @@ DB や Better Auth への依存を閉じ込めるため、先に境界を作る�
 
 - port/auth-handler.interface.ts: 認証 HTTP ハンドラーの IF
 - port/auth-session-reader.interface.ts: 現在のセッションから AuthenticatedUser を取得する IF
-- controller/http/auth.route.ts: ルート定義と依存性の注入
-- controller/http/require-authenticated-user.middleware.ts: port 経由で認証済みユーザーを要求するミドルウェア
+- usecase/handle-auth.use-case.ts: 認証 HTTP 要求のオーケストレーションとアプリケーション固有の前後処理
+- usecase/get-authenticated-user.use-case.ts: セッション取得とアプリケーション固有の認証条件の適用
+- controller/http/auth.route.ts: 認証ルートの定義
+- controller/http/auth.controller.ts: usecase の呼び出しと HTTP 入出力の変換
+- controller/http/require-authenticated-user.middleware.ts: GetAuthenticatedUserUseCase 経由で認証済みユーザーを要求するミドルウェア
 - infra/better-auth/better-auth-config.ts: Better Auth の設定と Prisma アダプターの組み立て
 - infra/better-auth/better-auth-handler.ts: Better Auth の auth.handler を port に適合させる実装
 - infra/better-auth/better-auth-session-reader.ts: auth.api.getSession の結果を port の DTO に変換する実装
 
-auth.route.ts で、次のように実装を組み立てる。
+src/index.ts で、次のように実装を組み立てる。
 
     const auth = createBetterAuth(...)
-    const handler = new BetterAuthHandler(auth)
+    const authHandler = new BetterAuthHandler(auth)
     const sessionReader = new BetterAuthSessionReader(auth)
-    return createAuthRoutes(handler, sessionReader)
+    const authUseCase = new HandleAuthUseCase(authHandler)
+    const authenticatedUserUseCase =
+      new GetAuthenticatedUserUseCase(sessionReader)
+    const authController = new AuthController(authUseCase)
+    return createApp({
+      db,
+      authController,
+      authenticatedUserUseCase,
+    })
 
-実際の関数名は採用する実装に合わせるが、設定、変換、HTTP ルート、ミドルウェアの責務は分離する。auth.ts に認証フロー全体を詰め込まない。
+実際の関数名は採用する実装に合わせるが、設定、変換、usecase、HTTP ルート、controller、ミドルウェアの責務は分離する。auth.ts に認証フロー全体を詰め込まない。usecase は Better Auth の型や Prisma の型を直接参照せず、port だけに依存する。
 
 完了条件:
 
 - port が Prisma または Better Auth の型を import していない。
+- usecase が Prisma または Better Auth の型を import していない。
 - 認証ハンドラーとセッション取得の実装が infra/better-auth にある。
 - 未認証リクエストは 401 になり、認証済みリクエストでは port の AuthenticatedUser を取得できる。
+- app.ts が Better Auth の設定や infra を直接 import せず、生成済みの controller/usecase を受け取っている。
 - auth のルートを既存 app に登録しても、既存 command/query のテストが壊れない。
 
 ## 4. Cookie とトークンのセキュリティポリシー
@@ -226,7 +239,7 @@ LINE で共通フローと競合処理を検証した後、Google を追加す�
 - ESLint
 - 変更した機能の統合テスト
 - 既存の command/query の回帰テスト
-- 差分レビュー（不要な auth/domain、auth/usecase、auth/composition、Prisma 型の port への流出がないこと）
+- 差分レビュー（不要な auth/domain、auth/composition 専用ディレクトリ、Prisma/Better Auth 型の port・usecase・controller への流出がないこと）
 
 プロバイダーの実アカウントや外部ネットワークが必要な確認は、通常の CI テストと分ける。CI では認証結果のテストダブルを使い、ステージングで実プロバイダーの E2E を実施する。
 

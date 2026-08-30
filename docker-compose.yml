@@ -29,6 +29,8 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-app}?schema=public
       NODE_ENV: development
+      BETTER_AUTH_SECRET: 74AwruzrCGHkjudV5NCjxm1hUuEQ058Wd/b9px/uFZU=
+      BETTER_AUTH_URL: http://localhost:3000
     ports:
       - '3000:3000'
     volumes:

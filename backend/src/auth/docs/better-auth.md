@@ -53,7 +53,11 @@ Better Auth 固有の設定と、アプリケーション固有の認証利用�
     ├── controller/
     │   └── http/
     │       ├── auth.route.ts
+    │       ├── auth.controller.ts
     │       └── require-authenticated-user.middleware.ts
+    ├── usecase/
+    │   ├── handle-auth.use-case.ts
+    │   └── get-authenticated-user.use-case.ts
     ├── port/
     │   ├── auth-handler.interface.ts
     │   └── auth-session-reader.interface.ts
@@ -73,20 +77,26 @@ Better Auth 固有の設定と、アプリケーション固有の認証利用�
         ├── full-scratch.md
         └── better-auth.md
 
-command の構成を参考に HTTP controller、port、infra を分離する。ただし、この auth モジュール自体は認証の業務ドメインを解決するものではない。そのため auth 配下に domain や、単なる委譲になる usecase、composition 専用ディレクトリは作成せず、アプリケーションとの契約を port に定義する。
+    command の構成を参考に HTTP controller、usecase、port、infra を分離する。この auth モジュール自体は認証の業務ドメインを解決するものではないため、auth/domain は作成しない。一方で、ログイン要求のオーケストレーションやアプリケーション固有の認証後処理を置く auth/usecase は作成する。composition 専用ディレクトリは作成せず、依存性の組み立ては src/index.ts を composition root として行う。
 
-Better Auth の handler は外部ライブラリの実装詳細なので、controller から直接 Better Auth を呼ばず、port 経由で呼び出す。
+Better Auth の handler は外部ライブラリの実装詳細なので、controller から直接 Better Auth を呼ばず、usecase と port を経由して呼び出す。
 
-better-auth-config.ts は Better Auth の設定と Prisma adapter の組み立てだけを担当する。認証処理、user の業務ルール、HTTP の分岐、競合リトライをこのファイルへ詰め込まない。better-auth-handler.ts と better-auth-session-reader.ts が、それぞれ auth.handler と auth.api.getSession を port の実装として公開する。
+better-auth-config.ts は Better Auth の設定と Prisma adapter の組み立てだけを担当する。認証処理、user の業務ルール、HTTP の分岐、競合リトライをこのファイルへ詰め込まない。better-auth-handler.ts と better-auth-session-reader.ts が、それぞれ auth.handler と auth.api.getSession を port の実装として公開する。アプリケーション固有の処理は usecase に置き、必要に応じて Better Auth の lifecycle hook から usecase を呼び出す。
 
-command の todo-command.route.ts と同じく、auth.route.ts を依存性の組み立て場所とする。auth.route.ts が Better Auth の設定、handler、session reader を生成し、auth.route.ts と require-authenticated-user.middleware.ts へ port の実装を注入する。PrismaClient を参照してよいのは controller の組み立て部分と infra に限る。
+auth.route.ts は認証用の HTTP ルートを定義するだけにする。auth.controller.ts が usecase を呼び出し、usecase が port を介して認証処理を実行する。Better Auth の設定、handler、session reader、usecase、controller の生成と注入は src/index.ts で行う。PrismaClient を参照してよいのは composition root と infra に限り、app.ts、route、controller、usecase、port へ Better Auth や Prisma の具体実装を漏らさない。
 
 ### 依存方向
 
-    controller/http
-        ├─ route の定義
-        ├─ port の実装を生成・注入
-        └──────────────→ port ←──────── infra/better-auth
+    src/index.ts（composition root）
+        ├─ Better Auth / Prisma の具体実装を生成
+        ├─ usecase と controller を生成
+        └─ createApp({ db, authController })
+
+    app.ts
+        └─ auth.route
+            └─ auth.controller
+                └─ usecase
+                    └──────────────→ port ←──────── infra/better-auth
 
     infra/better-auth
         ├─ Better Auth handler / API
@@ -96,29 +106,38 @@ command の todo-command.route.ts と同じく、auth.route.ts を依存性の�
 
     アプリケーションの認証必須 API
         ↓
+    GetAuthenticatedUserUseCase
+        ↓
     IAuthSessionReader
         ↓
     BetterAuthSessionReader
         ↓
     Better Auth API（セッション取得）
 
-port と controller の処理部分は PrismaClient、@prisma/client、Prisma の generated type、Better Auth の database model に依存しない。auth.route.ts の依存性を組み立てる箇所だけは infra の実装を参照してよい。DB と Better Auth の依存は infra に閉じ込め、port ではアプリケーションが必要とする型とインターフェースだけを定義する。
+port、usecase、controller の処理部分は PrismaClient、@prisma/client、Prisma の generated type、Better Auth の database model に依存しない。infra の実装を参照してよいのは src/index.ts の依存性組み立て部分に限定する。DB と Better Auth の依存は infra に閉じ込め、port ではアプリケーションが必要とする型とインターフェースだけを定義する。
 
-command のドメイン層から Prisma の account や session を直接検索しない。Todo などの業務ドメインは command 側に置き、認証済みユーザーの識別だけを IAuthSessionReader 経由で取得する。
+command のドメイン層から Prisma の account や session を直接検索しない。Todo などの業務ドメインは command 側に置き、認証済みユーザーの識別は GetAuthenticatedUserUseCase を経由して取得する。
 
 ### 各レイヤーの責務
 
 #### controller/http
 
 - Hono の route と middleware を定義する。
-- HTTP の Request を handler port または session reader port へ渡す。
+- HTTP の Request を controller から usecase へ渡す。
 - 認証されていない場合の 401 など、HTTP レスポンスへ変換する。
-- auth.route.ts の依存性を組み立てる箇所では infra の実装を参照してよい。
-- route の処理本体と middleware は Prisma、Prisma adapter、Better Auth の account/session 型を直接参照しない。
+- route、controller、middleware は Prisma、Prisma adapter、Better Auth の account/session 型を直接参照しない。
+
+#### usecase
+
+- アプリケーション固有の認証処理と、port を使ったオーケストレーションを担当する。
+- `handle-auth.use-case.ts` は認証 HTTP 要求を `IAuthHandler` へ渡し、必要な前後処理を行う。
+- `get-authenticated-user.use-case.ts` は `IAuthSessionReader` から認証済みユーザーを取得し、アプリケーションの認証条件を適用する。
+- Better Auth の user、session、account 型や Prisma の型を引数・戻り値にしない。
+- OAuth の state、PKCE、nonce、トークン交換など、Better Auth が担当する処理を再実装しない。
 
 #### port
 
-- controller と外部実装の境界を定義する。
+- usecase と外部実装の境界を定義する。
 - 認証済みユーザーの最小 DTO とインターフェースを公開する。
 - PrismaClient や Better Auth の型を引数・戻り値にしない。
 - 現在は IAuthHandler と IAuthSessionReader を定義する。AuthenticatedUser もこの port の契約として定義する。
@@ -135,6 +154,12 @@ Better Auth が所有する user、account、session、verification について
 - IAuthHandler と IAuthSessionReader を実装する。
 - token 保存ポリシーなど Better Auth hook の具体実装を置く。
 - Prisma と Better Auth の型を参照してよい唯一の認証実装層とする。
+
+#### composition root
+
+- `src/index.ts` で Better Auth、infra のアダプター、usecase、controller を生成する。
+- `app.ts` には、生成済みの controller と既存 command/query 用のDB依存だけを渡す。
+- Better Auth から別の認証実装へ差し替える場合は、infra の実装と `src/index.ts` の組み立てを変更し、app.ts、route、controller、usecase は変更しない。
 
 ### 既存 command との関係
 
@@ -179,12 +204,21 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
 
     export const auth = betterAuth({
       baseURL: env.AUTH_BASE_URL,
-      basePath: "/api/auth",
+      basePath: "/auth",
       secret: env.BETTER_AUTH_SECRET,
       trustedOrigins: env.AUTH_TRUSTED_ORIGINS,
       database: prismaAdapter(prisma, {
         provider: "postgresql",
       }),
+      user: {
+        modelName: "AuthUser",
+      },
+      session: {
+        modelName: "AuthSession",
+      },
+      verification: {
+        modelName: "AuthVerification",
+      },
       socialProviders: {
         line: {
           clientId: env.LINE_CLIENT_ID,
@@ -198,6 +232,7 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
         },
       },
       account: {
+        modelName: "AuthAccount",
         accountLinking: {
           enabled: true,
           disableImplicitLinking: true,
@@ -228,19 +263,37 @@ Better Auth の秘密鍵をローテーションする場合は、旧鍵を短�
 
 ### 認証ルートのマウント
 
-auth.route.ts は Hono の認証用パスを定義し、IAuthHandler の実装へ処理を委譲する。controller から Better Auth の auth.handler を直接呼び出さない。
+auth.route.ts は Hono の認証用パスを定義し、auth.controller.ts へ処理を委譲する。route や controller から Better Auth の auth.handler を直接呼び出さない。
 
-    export const createAuthRoute = ({
-      app,
-      authHandler,
-    }: {
-      app: Hono;
-      authHandler: IAuthHandler;
-    }) => {
-      app.all("/api/auth/*", (c) => authHandler.handle(c.req.raw));
+    type AuthController = {
+      handle(request: Request): Promise<Response>;
     };
 
-better-auth-handler.ts が IAuthHandler を実装し、その内部で Better Auth の auth.handler を呼び出す。auth.route.ts が BetterAuthHandler を生成して createAuthRoute に注入する。
+    export const createAuthRoute = (
+      authController: AuthController,
+    ) => {
+      const app = new Hono();
+      app.all("*", (c) => authController.handle(c.req.raw));
+      return app;
+    };
+
+auth.controller.ts は HandleAuthUseCase を呼び出し、HandleAuthUseCase は IAuthHandler を介して認証処理を実行する。better-auth-handler.ts が IAuthHandler を実装し、その内部で Better Auth の auth.handler を呼び出す。
+
+依存性の組み立ては `src/index.ts` で行う。auth.route.ts は Better Auth や infra の実装を生成しない。
+
+app.ts では、生成済みの controller を auth.route.ts へ渡すだけにする。
+
+    app.route("/auth", createAuthRoute(authController));
+
+    const auth = createBetterAuth(prisma);
+    const authHandler = createBetterAuthHandler(auth);
+    const authUseCase = new HandleAuthUseCase(authHandler);
+    const authController = new AuthController(authUseCase);
+
+    const app = createApp({
+      db: prisma,
+      authController,
+    });
 
 認証ルートには、アプリケーションの通常の JSON バリデーションや認証必須ミドルウェアを重ねない。Better Auth が要求する GET/POST とリクエスト本文をそのまま通す。
 
@@ -248,10 +301,10 @@ better-auth-handler.ts が IAuthHandler を実装し、その内部で Better Au
 
 ### アプリケーション API からのセッション取得
 
-Todo API などの認証必須ルートでは、require-authenticated-user.middleware.ts から IAuthSessionReader を呼び出す。controller から Better Auth のセッション API を直接呼び出さず、port 経由で取得する。
+Todo API などの認証必須ルートでは、require-authenticated-user.middleware.ts から GetAuthenticatedUserUseCase を呼び出す。middleware や controller から Better Auth のセッション API を直接呼び出さず、usecase と port 経由で取得する。
 
     const authenticatedUser =
-      await authSessionReader.getAuthenticatedUser({
+      await getAuthenticatedUserUseCase.execute({
         headers: c.req.raw.headers,
       });
 
@@ -261,7 +314,7 @@ Todo API などの認証必須ルートでは、require-authenticated-user.middl
 
     c.set("authenticatedUser", authenticatedUser);
 
-better-auth-session-reader.ts が IAuthSessionReader を実装し、内部で Better Auth の auth.api.getSession を呼び出す。BetterAuthSessionReader は Better Auth の user/session 型から port で定義した AuthenticatedUser DTO へ変換する。
+GetAuthenticatedUserUseCase は IAuthSessionReader を呼び出し、必要に応じてアプリケーション固有の認証条件を適用する。better-auth-session-reader.ts が IAuthSessionReader を実装し、内部で Better Auth の auth.api.getSession を呼び出す。BetterAuthSessionReader は Better Auth の user/session 型から port で定義した AuthenticatedUser DTO へ変換する。
 
     export interface IAuthSessionReader {
       getAuthenticatedUser(params: {
@@ -273,7 +326,7 @@ better-auth-session-reader.ts が IAuthSessionReader を実装し、内部で Be
       id: string;
     }
 
-この port と middleware は PrismaClient、@prisma/client、Better Auth の user/session 型を参照しない。認証済み user に業務上の属性や権限を追加する場合は、Todo などの業務ドメイン側で別途定義する。
+この port、usecase、middleware は PrismaClient、@prisma/client、Better Auth の user/session 型を参照しない。認証済み user に業務上の属性や権限を追加する場合は、usecase または Todo などの業務ドメイン側で別途定義する。
 
 以下は better-auth-session-reader.ts の内部処理であり、port や controller には置かない。
 
@@ -344,8 +397,8 @@ sequenceDiagram
     participant B as Browser
     participant H as Hono
     participant A as Better Auth
-    participant U as user / account / session tables (Better Auth)
-    participant V as verification table (Better Auth)
+    participant U as AuthUser / AuthAccount / AuthSession tables (Better Auth)
+    participant V as AuthVerification table (Better Auth)
     participant P as LINE / Google
 
     Note over U,V: Better Auth が自動生成するテーブル（同じ PostgreSQL）
@@ -487,12 +540,12 @@ Better Auth のデフォルト属性を採用する場合でも、生成され�
 
 今回の構成では、Better Auth のプラグインで追加の認証機能を有効化しない。Better Auth の core schema として、次の4テーブルを使用する。
 
-| テーブル     | 所有者      | 生成・反映                                                         | 用途                                 |
-| ------------ | ----------- | ------------------------------------------------------------------ | ------------------------------------ |
-| user         | Better Auth | Better Auth CLI が Prisma schema を生成し、Prisma migration で反映 | アプリケーションユーザー             |
-| account      | Better Auth | 同上                                                               | LINE / Google などの外部 identity    |
-| session      | Better Auth | 同上                                                               | アプリケーションのログインセッション |
-| verification | Better Auth | 同上                                                               | OAuth state などの一時的な検証情報   |
+| テーブル         | 所有者      | 生成・反映                                                         | 用途                                 |
+| ---------------- | ----------- | ------------------------------------------------------------------ | ------------------------------------ |
+| AuthUser         | Better Auth | Better Auth CLI が Prisma schema を生成し、Prisma migration で反映 | 認証ユーザー                         |
+| AuthAccount      | Better Auth | 同上                                                               | LINE / Google などの外部 identity    |
+| AuthSession      | Better Auth | 同上                                                               | アプリケーションのログインセッション |
+| AuthVerification | Better Auth | 同上                                                               | OAuth state などの一時的な検証情報   |
 
 ここでいう「自動生成」は、Better Auth が Prisma のモデル定義を生成することを指す。Prisma adapter を使う場合、生成された schema を確認したうえで、このリポジトリの Prisma migration を作成して DB にテーブルを作る。Better Auth の schema 生成だけで本番 DB にテーブルが自動作成されるわけではない。
 
@@ -502,7 +555,7 @@ Better Auth のプラグインを将来追加する場合は、プラグイン�
 
 Better Auth の論理モデルは次のテーブルを基本とする。実際のカラム名、型、インデックスは採用バージョンの Prisma schema generator が出力する内容を基準にする。
 
-#### user
+#### user（物理テーブル: AuthUser）
 
 | カラム        | 用途                                                    |
 | ------------- | ------------------------------------------------------- |
@@ -514,9 +567,9 @@ Better Auth の論理モデルは次のテーブルを基本とする。実際�
 | createdAt     | 作成日時                                                |
 | updatedAt     | 更新日時                                                |
 
-パスワードログインを有効にしないため、パスワードを必須カラムとする既存 User スキーマはそのまま使えない。既存の User を Better Auth の user に対応させる場合は、後述の移行を行う。
+Better Auth の論理モデル名は user のままだが、物理テーブルは AuthUser とする。既存の User テーブルは変更せず、従来のユーザー CRUD 用テーブルとして残す。
 
-#### account
+#### account（物理テーブル: AuthAccount）
 
 | カラム                | 用途                                                                             |
 | --------------------- | -------------------------------------------------------------------------------- |
@@ -546,7 +599,7 @@ Better Auth の provider identity は issuer と accountId の組み合わせで
 
 将来、LINE / Google の API を呼び出す認可機能を追加する場合は、必要な scope、access token、refresh token の保存可否、暗号化、鍵ローテーションを別の仕様として決める。認証のためだけに token を保存しない。
 
-#### session
+#### session（物理テーブル: AuthSession）
 
 | カラム                | 用途                                                                           |
 | --------------------- | ------------------------------------------------------------------------------ |
@@ -560,7 +613,7 @@ Better Auth の provider identity は issuer と accountId の組み合わせで
 
 session はアプリケーションのログイン状態だけを表す。provider の access token や ID token を session に詰めない。
 
-#### verification
+#### verification（物理テーブル: AuthVerification）
 
 OAuth state やその他の検証情報を Better Auth が保存するために使用する。TTL と一回性は Better Auth の仕様に従い、期限切れレコードを定期的に削除する。
 
@@ -568,7 +621,7 @@ OAuth state やその他の検証情報を Better Auth が保存するために�
 
 ### Todo とのリレーション
 
-Todo.userId は Better Auth の user.id を参照する。
+Unit 2 では既存機能への影響を避けるため、Todo.userId は既存 User.id を参照したままにする。認証済みユーザーの AuthUser.id を Todo の所有者へ接続する変更は、既存 Todo の移行方法を確定したうえで Unit 6 に実施する。
 
 ### 独自テーブル: Todo
 
@@ -607,33 +660,33 @@ Prisma 定義は次の形を基本とする。Better Auth CLI が生成する Pr
       COMPLETED
     }
 
-既存の User モデルは独自認証用のテーブルとして残さない。Better Auth の user モデルへ移行するか、Better Auth の user テーブルを既存 User にマッピングし、Todo.userId の参照先を一つに統一する。
+既存の User モデルは変更せず、Better Auth の user モデルとは分離する。Better Auth の設定で user、account、session、verification の modelName をそれぞれ AuthUser、AuthAccount、AuthSession、AuthVerification に指定する。
 
-現在の Prisma schema にある User は name、email、password を必須としているため、次のいずれかを明示的に選ぶ。
+現在の Prisma schema にある User は name、email、password を必須としている。採用方針は次のとおりとする。
 
-1. 既存 User テーブルを Better Auth の user モデルへ移行し、不要な password を削除する。
-2. Better Auth の user テーブルを別名で作り、Todo.userId の参照先を変更する。
-3. 既存 User を Better Auth の user モデルとしてマッピングできるかを Prisma adapter の制約内で確認する。
+1. 既存 User テーブルは変更しない。
+2. Better Auth の user テーブルを AuthUser として新規作成する。
+3. AuthUser と既存 Todo の接続は、Unit 6 で移行方針を確定してから変更する。
 
-暫定的に password にダミー値を保存して互換性だけを保つ方法は採用しない。パスワードログインを提供しない場合、パスワードを保持し続けることは不要な秘密情報を増やす。
+既存 User と AuthUser の email、name は別々に管理される。email だけで両者を暗黙にリンクしない。既存 User を削除する場合は、先に Todo の所有者を AuthUser へ移行し、旧 User CRUD が参照されないことを確認する。
 
 ```mermaid
 erDiagram
-    USER ||--o{ ACCOUNT : has
-    USER ||--o{ SESSION : has
+    AUTH_USER ||--o{ AUTH_ACCOUNT : has
+    AUTH_USER ||--o{ AUTH_SESSION : has
     USER ||--o{ TODO : owns
 
-    USER {
+    AUTH_USER {
         string id PK
     }
-    ACCOUNT {
+    AUTH_ACCOUNT {
         string id PK
         string userId FK
         string issuer
         string accountId
         string providerId
     }
-    SESSION {
+    AUTH_SESSION {
         string id PK
         string userId FK
         datetime expiresAt
@@ -652,7 +705,7 @@ erDiagram
     }
 ```
 
-USER、ACCOUNT、SESSION、VERIFICATION は Better Auth が schema を生成するテーブルであり、TODO はこのアプリケーションが独自に管理するテーブルである。USER と TODO は同じ PostgreSQL 内で外部キーにより関連付ける。
+AUTH_USER、AUTH_ACCOUNT、AUTH_SESSION、AUTH_VERIFICATION は Better Auth が schema を生成するテーブルであり、USER と TODO は既存アプリケーションが管理するテーブルである。Unit 2 では AUTH_USER と USER の間に暗黙の外部キーを作らない。
 
 ### Prisma schema の生成と migration
 
@@ -774,7 +827,7 @@ Better Auth の account linking を利用する場合は、暗黙リンクを無
 sequenceDiagram
     participant A as Callback A
     participant B as Callback B
-    participant D as user / account tables (Better Auth, PostgreSQL)
+    participant D as AuthUser / AuthAccount tables (Better Auth, PostgreSQL)
 
     A->>D: account がないことを確認
     D-->>A: 未登録
