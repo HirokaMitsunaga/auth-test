@@ -137,6 +137,8 @@ src/index.ts で、次のように実装を組み立てる。
 - origin、redirect URI、provider allowlist の拒否条件を確認できる。
 - ID トークンについて issuer、audience、signature、nonce、exp/iat など採用する検証条件が明文化されている。
 
+現時点の実装では、`__Host-session` と `__Host-` 系の Cookie 名、`Path=/`、`Secure`、`HttpOnly`、`SameSite=Lax`、Domain 未指定を `infra/better-auth/better-auth-config.ts` に固定している。`AuthAccount` の provider token、期限、scope は `hooks/account-token-policy.ts` の create/update hook で `NULL` にし、`updateAccountOnSignIn` と `storeAccountCookie` も無効化している。provider 固有の issuer、audience、redirect URI、allowlist の設定と検証は、LINE/Google を追加する Unit 5・8 で実装する。
+
 ## 5. LINE のログインを縦に実装
 
 最初のプロバイダーとして LINE だけを有効化し、開始からコールバック、ユーザー・アカウント・セッション作成までを一つの縦スライスで実装する。Google は共通部分が安定してから追加する。

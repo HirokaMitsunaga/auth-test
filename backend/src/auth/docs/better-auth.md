@@ -203,7 +203,7 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
 配置先は infra/better-auth/better-auth-config.ts とする。このファイルは Better Auth の設定と Prisma adapter の組み立てだけを担当し、認証処理や HTTP レスポンスの処理は持たない。
 
     export const auth = betterAuth({
-      baseURL: env.AUTH_BASE_URL,
+      baseURL: env.BETTER_AUTH_URL,
       basePath: "/auth",
       secret: env.BETTER_AUTH_SECRET,
       trustedOrigins: env.AUTH_TRUSTED_ORIGINS,
@@ -215,6 +215,8 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
       },
       session: {
         modelName: "AuthSession",
+        expiresIn: 60 * 60 * 24 * 7,
+        updateAge: 60 * 60 * 24,
       },
       verification: {
         modelName: "AuthVerification",
@@ -233,9 +235,35 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
       },
       account: {
         modelName: "AuthAccount",
+        updateAccountOnSignIn: false,
+        storeAccountCookie: false,
         accountLinking: {
           enabled: true,
           disableImplicitLinking: true,
+        },
+      },
+      advanced: {
+        useSecureCookies: false,
+        cookiePrefix: "__Host-auth",
+        defaultCookieAttributes: {
+          httpOnly: true,
+          secure: true,
+          sameSite: "lax",
+          path: "/",
+        },
+        cookies: {
+          session_token: {
+            name: "__Host-session",
+            attributes: {
+              maxAge: 60 * 60 * 24 * 7,
+            },
+          },
+        },
+      },
+      databaseHooks: {
+        account: {
+          create: { before: clearAccountTokenFields },
+          update: { before: clearAccountTokenFields },
         },
       },
     });
@@ -247,7 +275,7 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
 最低限、次の値を環境変数などのサーバー専用の秘密管理機構から注入する。
 
 - BETTER_AUTH_SECRET
-- AUTH_BASE_URL
+- BETTER_AUTH_URL
 - AUTH_TRUSTED_ORIGINS
 - LINE_CLIENT_ID
 - LINE_CLIENT_SECRET
@@ -508,7 +536,7 @@ clientSecret や JWKS の鍵をローテーションする場合、古いログ�
 
 \_\_Host- プレフィックスを使用するため、Domain を設定せず、Path を / とする。Better Auth の Cookie 設定 API でこの名前と属性を明示する。設定 API の実際のキー名は採用バージョンの型定義に合わせ、デフォルト値に依存しない。
 
-HTTP のローカル開発環境では Secure Cookie が送信されないため、開発環境を HTTP のままにする場合は、開発専用の Cookie 設定を明示する。本番設定の Secure を無効化することで動作確認しない。可能ならローカルも HTTPS とする。
+この構成では `Secure` を環境変数で切り替えず、開発環境でも有効に固定する。`__Host-` Cookie は Secure、Path=/、Domain 未指定が必須であるため、HTTP のローカル開発環境を本番と同じブラウザー条件で利用する場合は HTTPS またはブラウザーが安全なコンテキストとして扱う localhost を使用する。本番設定の Secure を無効化する開発用分岐は作らない。
 
 ### state 検証用 Cookie
 
@@ -523,7 +551,7 @@ state 用 Cookie についても、採用バージョンで次の条件を確認
 - Path は認証ルートを含むパスに一致する。
 - 有効期限が短く、callback 完了または失敗後に削除される。
 
-Better Auth のデフォルト属性を採用する場合でも、生成された Set-Cookie を結合テストで確認する。Cookie 名や属性を変更した後に、state 検証 Cookie と session Cookie を同じ名前へ設定しない。
+この実装では現在使用する `session_token` だけを `__Host-session` に固定し、個別名を指定していない Better Auth 管理 Cookie には `cookiePrefix: "__Host-auth"` を適用する。`session_data`、`account_data` など、現時点で有効化していない機能のCookie名は個別に固定しない。Better Auth の内部で `useSecureCookies` が `__Secure-` を追加すると `__Secure-__Host-...` になるため、そこだけは `false` を明示し、Secure は Cookie 属性と `__Host-` 名前で固定する。生成された Set-Cookie は結合テストで確認する。Cookie 名や属性を変更した後に、state 検証 Cookie と session Cookie を同じ名前へ設定しない。
 
 ### Cookie に入れない値
 
@@ -731,6 +759,8 @@ Better Auth の Prisma adapter は、必要な schema の生成を支援する�
 
 Better Auth の account モデルは OAuth token を保存できるが、保存できることと保存すべきことは別である。採用バージョンの account 作成・更新フックまたはアダプター拡張で、永続化前に token フィールドを消去し、account レコードには NULL だけが残るようにする。
 
+現在の実装では `infra/better-auth/hooks/account-token-policy.ts` の `clearAccountTokenFields` を `databaseHooks.account.create.before` と `databaseHooks.account.update.before` に登録する。`accessToken`、`refreshToken`、`idToken`、それぞれの期限、`scope` を `NULL` に置き換えるため、作成時だけでなく既存値を更新する場合も保存されない。また、`account.updateAccountOnSignIn` と `account.storeAccountCookie` を `false` に固定し、再ログイン時の token 更新と account token の Cookie 保存も無効にする。
+
 このポリシーは設定しただけで完了とせず、DB の account レコードに token が残っていないことを結合テストで確認する。フックでは token を除去できないバージョンを採用する場合、次のいずれかを決めるまで本番採用しない。
 
 - Better Auth の暗号化機能を有効にして暗号化保存する。
@@ -917,6 +947,12 @@ session が失効した後に、保存済み provider token を使ってアプ�
 ### セッション期限
 
 Cookie の Max-Age と DB の expiresAt の意味が一致するように Better Auth の session 設定を固定する。Cookie が残っていても DB 側で期限切れまたは revoked なら認証済みとしない。
+
+`session.expiresIn` は、OAuth ログインが成功した後に Better Auth が発行するアプリケーションセッション（AuthSession）の有効期限である。認証 URL の発行後に callback を待てる時間ではない。`updateAge` はセッション利用時に有効期限を延長する最小間隔であり、今回の設定では 1 日以上経過してセッションが利用された場合に、期限を利用時点から 7 日へ更新する。
+
+Better Auth のデフォルトとして案内されているセッション設定を明示し、`expiresIn` を 7 日、`updateAge` を 1 日に固定する。これは全システムに対する普遍的な推奨値ではないため、より短いセッションが必要な場合は Todo のデータ保護要件と運用要件に基づいて変更する。
+
+OAuth の state と検証用 Cookie の有効期限はセッションとは別に Better Auth が管理する。DB を利用する現在の構成では、state の検証レコードと Cookie の短期 TTL、callback 完了または失敗時の削除は Better Auth の採用バージョンの仕様に従う。認証 URL の有効期限を 7 日に延長する設定は行わない。
 
 セッションを短くするか、長期ログインを許可するかは、Todo のデータ保護要件と運用要件に基づいて決める。provider token の期限を Better Auth session の期限として流用しない。
 
