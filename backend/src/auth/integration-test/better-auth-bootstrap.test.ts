@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
+import { afterAll, describe, expect, it } from 'vitest';
 
-import { createAuthRoute } from '../controller/http/auth.route.js';
+import { createApp } from '../../app.js';
+import { AuthController } from '../controller/http/auth.controller.js';
 import { createBetterAuth } from '../infra/better-auth/better-auth-config.js';
+import { BetterAuthHandler } from '../infra/better-auth/better-auth-handler.js';
+import { HandleAuthUseCase } from '../usecase/handle-auth.use-case.js';
 import { prisma } from '../../prisma.js';
 
 process.env.BETTER_AUTH_SECRET ??=
@@ -10,9 +12,16 @@ process.env.BETTER_AUTH_SECRET ??=
 process.env.BETTER_AUTH_URL ??= 'http://localhost:3000';
 
 describe('Better Auth 最小構成', () => {
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
   it('【正常系】認証ハンドラーを/auth配下へ接続できる', async () => {
-    const app = new Hono();
-    app.route('/auth', createAuthRoute(createBetterAuth(prisma)));
+    const auth = createBetterAuth(prisma);
+    const authHandler = new BetterAuthHandler(auth);
+    const authUseCase = new HandleAuthUseCase(authHandler);
+    const authController = new AuthController(authUseCase);
+    const app = createApp({ db: prisma, authController });
 
     const response = await app.request('/auth/get-session');
 

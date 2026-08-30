@@ -1,13 +1,11 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 
-type AuthHandler = {
-  handler: (request: Request) => Promise<Response>;
-};
+import type { AuthController } from './auth.controller.js';
 
-export const createAuthRoute = (auth: AuthHandler) => {
+export const createAuthRoute = (authController: AuthController) => {
   const app = new OpenAPIHono();
 
-  app.all('*', (c) => auth.handler(c.req.raw));
+  app.all('*', (c) => authController.handle(c.req.raw));
 
   return app;
 };

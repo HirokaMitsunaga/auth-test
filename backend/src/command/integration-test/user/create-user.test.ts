@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
-import { createApp } from '../../../app.js';
+import { createTestApp as createApp } from '../../../auth/integration-test/create-test-app.js';
 
 if (!process.env.DATABASE_URL) {
   process.loadEnvFile(new URL('../../../../.env', import.meta.url));

@@ -286,7 +286,7 @@ app.ts では、生成済みの controller を auth.route.ts へ渡すだけに�
     app.route("/auth", createAuthRoute(authController));
 
     const auth = createBetterAuth(prisma);
-    const authHandler = createBetterAuthHandler(auth);
+    const authHandler = new BetterAuthHandler(auth);
     const authUseCase = new HandleAuthUseCase(authHandler);
     const authController = new AuthController(authUseCase);
 

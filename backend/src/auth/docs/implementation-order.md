@@ -95,16 +95,16 @@ src/index.ts で、次のように実装を組み立てる。
 
     const auth = createBetterAuth(...)
     const authHandler = new BetterAuthHandler(auth)
-    const sessionReader = new BetterAuthSessionReader(auth)
     const authUseCase = new HandleAuthUseCase(authHandler)
-    const authenticatedUserUseCase =
-      new GetAuthenticatedUserUseCase(sessionReader)
     const authController = new AuthController(authUseCase)
     return createApp({
       db,
       authController,
-      authenticatedUserUseCase,
     })
+
+保護ルートへ認証ミドルウェアを接続する際は、同じ composition root で
+`BetterAuthSessionReader` と `GetAuthenticatedUserUseCase` を生成して
+`requireAuthenticatedUser` へ注入する。Unit 3 ではその実装と未認証時の 401 境界までを用意し、Todo ルートへの適用は Unit 6 で行う。
 
 実際の関数名は採用する実装に合わせるが、設定、変換、usecase、HTTP ルート、controller、ミドルウェアの責務は分離する。auth.ts に認証フロー全体を詰め込まない。usecase は Better Auth の型や Prisma の型を直接参照せず、port だけに依存する。
 
