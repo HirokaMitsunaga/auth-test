@@ -6,11 +6,7 @@
     "source.fixAll.eslint": "explicit"
   },
   "[typescript]": {
-    "editor.defaultFormatter": "vscode.typescript-language-features",
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-      "source.fixAll.eslint": "explicit"
-    }
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   },
   "[typescriptreact]": {
     "editor.defaultFormatter": "vscode.typescript-language-features",
@@ -19,7 +15,11 @@
       "source.fixAll.eslint": "explicit"
     }
   },
-  "eslint.validate": ["javascript", "typescript", "typescriptreact"],
+  "eslint.validate": [
+    "javascript",
+    "typescript",
+    "typescriptreact"
+  ],
   "typescript.tsdk": "node_modules/typescript/lib",
   "editor.tabSize": 2,
   "terminal.integrated.defaultProfile.windows": "PowerShell",
@@ -36,8 +36,14 @@
     "**/node_modules": true
   },
   "git.ignoreLimitWarning": true,
-  "i18n-ally.localesPaths": ["/locales", "/frontend/locales"],
-  "i18n-ally.enabledFrameworks": ["nestjs", "next"],
+  "i18n-ally.localesPaths": [
+    "/locales",
+    "/frontend/locales"
+  ],
+  "i18n-ally.enabledFrameworks": [
+    "nestjs",
+    "next"
+  ],
   "files.autoSave": "onFocusChange",
   "[prisma]": {
     "editor.defaultFormatter": "Prisma.prisma"
