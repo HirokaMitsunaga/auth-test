@@ -9,10 +9,10 @@ Better Auth を使った認証を、責務ごとに分割して実装するた�
 
 ## 前提
 
-- 認証のプロトコル処理は Better Auth に委譲する。auth/domain は作らないが、アプリケーション固有の処理をオーケストレーションする auth/usecase は作成する。
+- 認証のプロトコル処理は Better Auth に委譲する。auth/domainとauth/usecaseは作らず、アプリケーション固有の処理が発生した時点で必要なusecaseだけを追加する。
 - auth の port にはアプリケーションが必要とする IF と DTO だけを定義し、Prisma や Better Auth の型を公開しない。
 - Better Auth と Prisma の接続、スキーマ、フックは infra/better-auth に閉じ込める。
-- route、controller、usecase は具体的な認証実装に依存しない。依存性の注入と実装の組み立ては src/index.ts を composition root として行う。composition 専用ディレクトリは作成しない。
+- route、middleware、portは具体的な認証実装に依存しない。依存性の注入と実装の組み立てはsrc/index.tsをcomposition rootとして行う。composition専用ディレクトリは作成しない。
 - 今回は認証だけを扱う。LINE/Google のアクセストークンを使ったプロバイダー API 呼び出し（認可）は実装しない。
 - Better Auth のバージョンと Prisma アダプターの API は、実装開始時に固定して確認する。公式ドキュメントの生成手順や現在の API と差分がある場合は、採用するバージョンの仕様を優先する。
 - 既存の User テーブルは変更しない。Better Auth の論理モデル user は物理テーブル AuthUser として分離し、Todo との接続は認証ユーザー連携の単位で移行方法を決める。
@@ -23,7 +23,7 @@ Better Auth を使った認証を、責務ごとに分割して実装するた�
 | --- | --- | --- | --- |
 | 1 | 最小構成の疎通とバージョン固定 | Better Auth の最小設定、バージョン方針 | 認証インスタンスを起動でき、採用バージョンとアダプター API が確定している |
 | 2 | 認証スキーマと DB マイグレーション | AuthUser / AuthAccount / AuthSession / AuthVerification | 既存 User/Todo を変更せず、空の DB と既存 DB の両方でスキーマを適用できる |
-| 3 | auth の port・infra・usecase・controller の骨格 | port、Better Auth アダプター、usecase、HTTP ルート | DB 依存を port/usecase/controller に漏らさず、認証処理とセッション取得まで動作する |
+| 3 | auth の port・infra・HTTP ルートの骨格 | port、Better Auth アダプター、HTTP ルート | DB 依存を port/HTTP ルートに漏らさず、認証処理とセッション取得まで動作する |
 | 4 | Cookie とトークンのセキュリティポリシー | Cookie 固定、account トークンポリシー | 属性と保存禁止項目をテストで固定できている |
 | 5 | LINE のログインを縦に実装 | LINE 設定、コールバック、関連テスト | 初回ログイン、再ログイン、ログアウトが動作する |
 | 6 | Todo への認証ユーザー連携 | 認証ミドルウェア、command/query の利用変更 | リクエスト由来の userId に依存せず、セッションユーザーで認可できる |
@@ -74,47 +74,36 @@ Better Auth を使った認証を、責務ごとに分割して実装するた�
 - 既存 User/Todo データを変更せずに適用できる。
 - AuthUser、AuthAccount、AuthSession、AuthVerification の制約とインデックスが設計書と一致している。
 
-## 3. auth の port・infra・usecase・controller の骨格
+## 3. auth の port・infra・HTTP ルートの骨格
 
-DB や Better Auth への依存を閉じ込めるため、先に境界を作る。auth は外部認証機能の利用であり、このシステム固有の業務 domain ではないため、auth/domain は作らない。
+DBやBetter Authへの依存を閉じ込めるため、先に境界を作る。authは外部認証機能の利用であり、このシステム固有の業務domainではない。OAuth/OIDCの処理もBetter Authが担当するため、auth/domainとauth/usecaseは作らない。
 
 作成する責務:
 
-- port/auth-handler.interface.ts: 認証 HTTP ハンドラーの IF
-- port/auth-session-reader.interface.ts: 現在のセッションから AuthenticatedUser を取得する IF
-- usecase/handle-auth.use-case.ts: 認証 HTTP 要求のオーケストレーションとアプリケーション固有の前後処理
-- usecase/get-authenticated-user.use-case.ts: セッション取得とアプリケーション固有の認証条件の適用
-- controller/http/auth.route.ts: 認証ルートの定義
-- controller/http/auth.controller.ts: usecase の呼び出しと HTTP 入出力の変換
-- controller/http/require-authenticated-user.middleware.ts: GetAuthenticatedUserUseCase 経由で認証済みユーザーを要求するミドルウェア
+- auth/auth.ts: Better Authの設定とhandlerを生成するfactory
+- auth/route.ts: 利用するBetter Authエンドポイントのパス・HTTPメソッド分岐
+- port/auth-request-handler.interface.ts: 認証 HTTP Request ハンドラーの IF
+- app.ts: `auth/route.ts`で作成した認証ルートを`/auth`へマウント
 - infra/better-auth/better-auth-config.ts: Better Auth の設定と Prisma アダプターの組み立て
 - infra/better-auth/better-auth-handler.ts: Better Auth の auth.handler を port に適合させる実装
-- infra/better-auth/better-auth-session-reader.ts: auth.api.getSession の結果を port の DTO に変換する実装
 
-src/index.ts で、次のように実装を組み立てる。
+auth/auth.tsでBetter Auth固有の実装を組み立て、src/index.tsでは次のようにfactoryへDBを渡してhandlerを注入する。
 
-    const auth = createBetterAuth(...)
-    const authHandler = new BetterAuthHandler(auth)
-    const authUseCase = new HandleAuthUseCase(authHandler)
-    const authController = new AuthController(authUseCase)
+    const auth = createAuth(prisma)
     return createApp({
       db,
-      authController,
+      auth,
     })
 
-保護ルートへ認証ミドルウェアを接続する際は、同じ composition root で
-`BetterAuthSessionReader` と `GetAuthenticatedUserUseCase` を生成して
-`requireAuthenticatedUser` へ注入する。Unit 3 ではその実装と未認証時の 401 境界までを用意し、Todo ルートへの適用は Unit 6 で行う。
+Unit 3ではBetter AuthのHTTP handler接続までを用意する。保護APIの認証境界は、対象routeを実装するUnit 6で必要性と方式を改めて定義する。アプリケーション固有の認証条件が発生した場合だけ、必要なportまたはusecaseを追加する。
 
-実際の関数名は採用する実装に合わせるが、設定、変換、usecase、HTTP ルート、controller、ミドルウェアの責務は分離する。auth.ts に認証フロー全体を詰め込まない。usecase は Better Auth の型や Prisma の型を直接参照せず、port だけに依存する。
+実際の関数名は採用する実装に合わせるが、設定、変換、HTTPルート、ミドルウェアの責務は分離する。auth/auth.tsにはBetter Authの設定とhandler生成だけを置き、認証フロー全体を詰め込まない。アプリケーション固有の処理を追加する場合も、Better Authの型やPrismaの型をHTTP層へ漏らさず、必要なportを定義する。
 
 完了条件:
 
 - port が Prisma または Better Auth の型を import していない。
-- usecase が Prisma または Better Auth の型を import していない。
 - 認証ハンドラーとセッション取得の実装が infra/better-auth にある。
-- 未認証リクエストは 401 になり、認証済みリクエストでは port の AuthenticatedUser を取得できる。
-- app.ts が Better Auth の設定や infra を直接 import せず、生成済みの controller/usecase を受け取っている。
+- app.tsがBetter Authの設定やinfraを直接importせず、生成済みのauthを受け取っている。
 - auth のルートを既存 app に登録しても、既存 command/query のテストが壊れない。
 
 ## 4. Cookie とトークンのセキュリティポリシー
@@ -145,9 +134,9 @@ src/index.ts で、次のように実装を組み立てる。
 
 実施内容:
 
-- LINE の client_id、client_secret、issuer、redirect URI を環境設定から取得する。
-- 認証開始、state/nonce、コールバック、エラー時の戻り先を実装する。
-- ID トークンの issuer、audience、署名、nonce、有効期限、必須 subject を検証する。
+- LINE の client_id、client_secret、redirect URI を環境設定から取得する。issuer は LINE Login の固定値 `https://access.line.me` として provider 実装に固定する。
+- Better Auth の LINE provider を plugin で構成し、認証開始、state/nonce、PKCE、コールバック、エラー時の戻り先を実装する。
+- LINE の公式 ID token verify endpoint を利用し、issuer、audience、署名、nonce、有効期限、発行時刻、必須 subject を検証する。
 - account の providerId と外部 subject を使って既存ユーザーを特定する。
 - email の一致だけで既存ユーザーへ暗黙リンクしない。リンクは明示操作がある場合だけに限定する。
 - 外部プロバイダーを直接呼ばないテスト用の認証結果を用意し、統合テストを安定させる。
@@ -156,16 +145,16 @@ src/index.ts で、次のように実装を組み立てる。
 
 - 初回ログインで user、account、session が 1 件ずつ作成される。
 - 2 回目以降は既存 account からログインできる。
-- 不正な state/nonce、issuer、audience、署名、期限の ID トークンを拒否できる。
+- 不正な state/nonce、issuer、audience、署名、期限の ID トークンを拒否できる。LINE の署名検証は公式 verify endpoint の責務とし、アプリケーションはその検証済みレスポンスの必須 claim も確認する。
 - ログアウト後に保護された API が 401 になる。
 
 ## 6. Todo への認証ユーザー連携
 
-認証が単独で動いた後、既存 Todo の入口へ認証ユーザーを接続する。認証の実装を Todo の domain に混ぜず、controller のミドルウェアと既存 usecase の入力境界で連携する。
+認証が単独で動いた後、既存Todoの入口へ認証ユーザーを接続する。認証の実装をTodoのdomainに混ぜず、controllerのmiddlewareと既存usecaseの入力境界で連携する。
 
 実施内容:
 
-- Todo の保護ルートへ require-authenticated-user.middleware.ts を適用する。
+- Todo の保護ルートに必要な認証方式を定義する。
 - セッションから得た Better Auth user.id を Todo の userId として usecase へ渡す。
 - リクエストボディや URL パラメーターの userId を所有者判定に使わない。
 - 一覧、取得、更新、削除の全操作で userId による所有者条件を適用する。
@@ -210,7 +199,7 @@ LINE で共通フローと競合処理を検証した後、Google を追加す�
 
 完了条件:
 
-- LINE と Google が同じ session reader と認証済みユーザーの扱いを利用する。
+- LINE と Google が同じセッションと認証済みユーザーの扱いを利用する。
 - provider ごとに issuer、audience、redirect URI が混同されない。
 - Google 追加によって LINE や Todo の認証認可テストが壊れない。
 

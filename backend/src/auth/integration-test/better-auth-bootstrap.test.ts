@@ -1,31 +1,52 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { createApp } from '../../app.js';
-import { AuthController } from '../controller/http/auth.controller.js';
-import { createBetterAuth } from '../infra/better-auth/better-auth-config.js';
-import { BetterAuthHandler } from '../infra/better-auth/better-auth-handler.js';
-import { HandleAuthUseCase } from '../usecase/handle-auth.use-case.js';
+import { createAuth } from '../auth.js';
 import { prisma } from '../../prisma.js';
 
 process.env.BETTER_AUTH_SECRET ??=
   '74AwruzrCGHkjudV5NCjxm1hUuEQ058Wd/b9px/uFZU=';
 process.env.BETTER_AUTH_URL ??= 'http://localhost:3000';
+process.env.LINE_CLIENT_ID ??= 'line-test-client-id';
+process.env.LINE_CLIENT_SECRET ??= 'line-test-client-secret';
+process.env.LINE_REDIRECT_URI ??= 'http://localhost:3000/auth/callback/line';
 
 describe('Better Auth 最小構成', () => {
   afterAll(async () => {
     await prisma.$disconnect();
   });
 
-  it('【正常系】認証ハンドラーを/auth配下へ接続できる', async () => {
-    const auth = createBetterAuth(prisma);
-    const authHandler = new BetterAuthHandler(auth);
-    const authUseCase = new HandleAuthUseCase(authHandler);
-    const authController = new AuthController(authUseCase);
-    const app = createApp({ db: prisma, authController });
+  it('【正常系】認証コールバックを/auth配下へ接続できる', async () => {
+    const auth = createAuth(prisma);
+    const app = createApp({ db: prisma, auth });
 
-    const response = await app.request('/auth/get-session');
+    const response = await app.request(
+      '/auth/callback/line?code=code&state=invalid-state',
+    );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toBeNull();
+    expect(response.status).toBe(302);
+    expect(new URL(response.headers.get('location') ?? '').pathname).toBe(
+      '/auth/error',
+    );
+  });
+
+  it.each([
+    {
+      description: 'GET/POST以外の認証リクエストを受け付けない',
+      path: '/auth/sign-in/social',
+      options: { method: 'PUT' },
+    },
+    {
+      description: '定義されていない認証パスを受け付けない',
+      path: '/auth/not-defined',
+      options: { method: 'GET' },
+    },
+  ])('【異常系】$description', async ({ path, options }) => {
+    const auth = createAuth(prisma);
+    const app = createApp({ db: prisma, auth });
+
+    const response = await app.request(path, options);
+
+    expect(response.status).toBe(404);
   });
 });

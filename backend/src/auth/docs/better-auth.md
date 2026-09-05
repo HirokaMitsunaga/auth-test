@@ -50,22 +50,15 @@ state や PKCE をアプリケーションのコールバックルートで再�
 Better Auth 固有の設定と、アプリケーション固有の認証利用コードを分離する。
 
     backend/src/auth/
-    ├── controller/
-    │   └── http/
-    │       ├── auth.route.ts
-    │       ├── auth.controller.ts
-    │       └── require-authenticated-user.middleware.ts
-    ├── usecase/
-    │   ├── handle-auth.use-case.ts
-    │   └── get-authenticated-user.use-case.ts
+    ├── auth.ts
+    ├── route.ts
     ├── port/
-    │   ├── auth-handler.interface.ts
-    │   └── auth-session-reader.interface.ts
+    │   └── auth-request-handler.interface.ts
     ├── infra/
     │   └── better-auth/
     │       ├── better-auth-config.ts
+    │       ├── line-provider.ts
     │       ├── better-auth-handler.ts
-    │       ├── better-auth-session-reader.ts
     │       └── hooks/
     │           ├── account-token-policy.ts
     ├── integration-test/
@@ -75,28 +68,35 @@ Better Auth 固有の設定と、アプリケーション固有の認証利用�
     │   └── session.test.ts
     └── docs/
         ├── full-scratch.md
+        ├── better-auth-flow.md
         └── better-auth.md
 
-    command の構成を参考に HTTP controller、usecase、port、infra を分離する。この auth モジュール自体は認証の業務ドメインを解決するものではないため、auth/domain は作成しない。一方で、ログイン要求のオーケストレーションやアプリケーション固有の認証後処理を置く auth/usecase は作成する。composition 専用ディレクトリは作成せず、依存性の組み立ては src/index.ts を composition root として行う。
+    この auth モジュール自体は認証の業務ドメインを解決するものではなく、OAuth/OIDCの処理もBetter Authへ委譲するため、auth/domainとauth/usecaseは作成しない。HTTPルートはportだけに依存し、Better Auth固有の実装はinfraに閉じ込める。Better Authの設定とhandler生成はauth/auth.tsのfactoryに閉じ込め、依存性の注入はsrc/index.tsをcomposition rootとして行う。composition専用ディレクトリは作成しない。
 
-Better Auth の handler は外部ライブラリの実装詳細なので、controller から直接 Better Auth を呼ばず、usecase と port を経由して呼び出す。
+Better Authのhandlerは外部ライブラリの実装詳細なので、app.tsから直接Better Authを呼ばず、IAuthRequestHandlerとBetterAuthHandlerを経由して呼び出す。
 
-better-auth-config.ts は Better Auth の設定と Prisma adapter の組み立てだけを担当する。認証処理、user の業務ルール、HTTP の分岐、競合リトライをこのファイルへ詰め込まない。better-auth-handler.ts と better-auth-session-reader.ts が、それぞれ auth.handler と auth.api.getSession を port の実装として公開する。アプリケーション固有の処理は usecase に置き、必要に応じて Better Auth の lifecycle hook から usecase を呼び出す。
+better-auth-config.tsはBetter Authの設定とPrisma adapterの組み立てだけを担当する。認証処理、userの業務ルール、HTTPの分岐、競合リトライをこのファイルへ詰め込まない。better-auth-handler.tsがauth.handlerをportの実装として公開する。アプリケーション固有の認証後処理が発生した場合にだけ、その処理用のusecaseを追加する。
 
-auth.route.ts は認証用の HTTP ルートを定義するだけにする。auth.controller.ts が usecase を呼び出し、usecase が port を介して認証処理を実行する。Better Auth の設定、handler、session reader、usecase、controller の生成と注入は src/index.ts で行う。PrismaClient を参照してよいのは composition root と infra に限り、app.ts、route、controller、usecase、port へ Better Auth や Prisma の具体実装を漏らさない。
+auth/route.tsは利用するBetter AuthのエンドポイントをパスとHTTPメソッドごとに定義し、IAuthRequestHandlerへ渡す。app.tsは認証routeを`/auth`へmountするだけにする。Better Authの設定とhandler生成はauth/auth.tsで行い、src/index.tsは生成済みのhandlerをapp.tsへ注入する。PrismaClientを参照してよいのはcomposition rootとinfraに限り、app.ts、route、portへPrismaやBetter Authの具体実装を漏らさない。
 
 ### 依存方向
 
     src/index.ts（composition root）
-        ├─ Better Auth / Prisma の具体実装を生成
-        ├─ usecase と controller を生成
-        └─ createApp({ db, authController })
+        ├─ prismaを生成
+        ├─ createAuth(prisma)を呼び出す
+        └─ createApp({ db, auth })
+
+    auth/auth.ts
+        ├─ createBetterAuth(database)
+        └─ BetterAuthHandler を生成
+
+    auth/route.ts
+        ├─ POST /sign-in/social
+        └─ GET/POST /callback/line
+            └──────────────→ IAuthRequestHandler ←──────── BetterAuthHandler
 
     app.ts
-        └─ auth.route
-            └─ auth.controller
-                └─ usecase
-                    └──────────────→ port ←──────── infra/better-auth
+        └─ app.route('/auth', authRoute)
 
     infra/better-auth
         ├─ Better Auth handler / API
@@ -104,45 +104,19 @@ auth.route.ts は認証用の HTTP ルートを定義するだけにする。aut
                     ↓
                 PostgreSQL
 
-    アプリケーションの認証必須 API
-        ↓
-    GetAuthenticatedUserUseCase
-        ↓
-    IAuthSessionReader
-        ↓
-    BetterAuthSessionReader
-        ↓
-    Better Auth API（セッション取得）
+portとapp.tsの処理部分はPrismaClient、@prisma/client、Prismaのgenerated type、Better Authのdatabase modelに依存しない。Better Authの具体実装を参照してよいのはauth/auth.tsとinfra/better-authに限定する。DBとBetter Authの依存は認証の組み立て層・infraに閉じ込め、portではアプリケーションが必要とする型とインターフェースだけを定義する。
 
-port、usecase、controller の処理部分は PrismaClient、@prisma/client、Prisma の generated type、Better Auth の database model に依存しない。infra の実装を参照してよいのは src/index.ts の依存性組み立て部分に限定する。DB と Better Auth の依存は infra に閉じ込め、port ではアプリケーションが必要とする型とインターフェースだけを定義する。
-
-command のドメイン層から Prisma の account や session を直接検索しない。Todo などの業務ドメインは command 側に置き、認証済みユーザーの識別は GetAuthenticatedUserUseCase を経由して取得する。
+commandのドメイン層からPrismaのaccountやsessionを直接検索しない。Todoなどの業務ドメインはcommand側に置き、認証処理を業務ドメインへ混在させない。
 
 ### 各レイヤーの責務
 
-#### controller/http
-
-- Hono の route と middleware を定義する。
-- HTTP の Request を controller から usecase へ渡す。
-- 認証されていない場合の 401 など、HTTP レスポンスへ変換する。
-- route、controller、middleware は Prisma、Prisma adapter、Better Auth の account/session 型を直接参照しない。
-
-#### usecase
-
-- アプリケーション固有の認証処理と、port を使ったオーケストレーションを担当する。
-- `handle-auth.use-case.ts` は認証 HTTP 要求を `IAuthHandler` へ渡し、必要な前後処理を行う。
-- `get-authenticated-user.use-case.ts` は `IAuthSessionReader` から認証済みユーザーを取得し、アプリケーションの認証条件を適用する。
-- Better Auth の user、session、account 型や Prisma の型を引数・戻り値にしない。
-- OAuth の state、PKCE、nonce、トークン交換など、Better Auth が担当する処理を再実装しない。
-
 #### port
 
-- usecase と外部実装の境界を定義する。
-- 認証済みユーザーの最小 DTO とインターフェースを公開する。
+- HTTP層と外部実装の境界を定義する。
 - PrismaClient や Better Auth の型を引数・戻り値にしない。
-- 現在は IAuthHandler と IAuthSessionReader を定義する。AuthenticatedUser もこの port の契約として定義する。
+- 現在はIAuthRequestHandlerを定義する。
 
-  export interface IAuthHandler {
+  export interface IAuthRequestHandler {
   handle(request: Request): Promise<Response>;
   }
 
@@ -151,15 +125,16 @@ Better Auth が所有する user、account、session、verification について
 #### infra/better-auth
 
 - Better Auth の設定、Prisma adapter、Hono handler との接続を実装する。
-- IAuthHandler と IAuthSessionReader を実装する。
+- IAuthRequestHandlerを実装する。
 - token 保存ポリシーなど Better Auth hook の具体実装を置く。
 - Prisma と Better Auth の型を参照してよい唯一の認証実装層とする。
 
 #### composition root
 
-- `src/index.ts` で Better Auth、infra のアダプター、usecase、controller を生成する。
-- `app.ts` には、生成済みの controller と既存 command/query 用のDB依存だけを渡す。
-- Better Auth から別の認証実装へ差し替える場合は、infra の実装と `src/index.ts` の組み立てを変更し、app.ts、route、controller、usecase は変更しない。
+- `auth/auth.ts`でBetter Authとinfraのアダプターを生成する。
+- `src/index.ts`で`createAuth(prisma)`を呼び出し、生成済みのauthをapp.tsへ注入する。
+- `app.ts`には、生成済みのauthと既存command/query用のDB依存だけを渡す。
+- Better Authから別の認証実装へ差し替える場合は、auth/auth.tsのfactoryとinfraの実装を変更し、app.ts、portは変更しない。
 
 ### 既存 command との関係
 
@@ -189,12 +164,11 @@ Better Auth が所有する user、account、session、verification について
 
 必要な依存は次のとおりとする。
 
-- better-auth
-- @better-auth/prisma-adapter
+- better-auth@1.7.2（Prisma adapter は `better-auth/adapters/prisma` から利用）
 
 LINE と Google のためにプロバイダーごとの OAuth SDK を追加しない。Better Auth の social provider または Generic OAuth の機能を使用する。
 
-依存ライブラリを追加する前に、現在の Node.js、Hono、Prisma のバージョンと Better Auth の対応状況を確認する。現時点で Better Auth は既存の package.json に含まれていないため、実装時にバージョンを決定し、lockfile まで更新する。
+Better Auth のバージョンは `package.json` と lockfile で `1.7.2` に固定している。Node.js、Hono、Prisma のバージョンを更新する場合は、認証フローの結合テストも再実行する。
 
 ### 設定例
 
@@ -202,6 +176,9 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
 
 配置先は infra/better-auth/better-auth-config.ts とする。このファイルは Better Auth の設定と Prisma adapter の組み立てだけを担当し、認証処理や HTTP レスポンスの処理は持たない。
 
+    // 実装: backend/src/auth/infra/better-auth/better-auth-config.ts
+    // createLineProviderPlugin は Better Auth 1.7.2 の LINE provider を
+    // 認可コードフローへ接続し、callback の nonce と ID token 検証を補う。
     export const auth = betterAuth({
       baseURL: env.BETTER_AUTH_URL,
       basePath: "/auth",
@@ -221,18 +198,13 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
       verification: {
         modelName: "AuthVerification",
       },
-      socialProviders: {
-        line: {
+      plugins: [
+        createLineProviderPlugin({
           clientId: env.LINE_CLIENT_ID,
           clientSecret: env.LINE_CLIENT_SECRET,
-          scope: ["openid", "profile", "email"],
-        },
-        google: {
-          clientId: env.GOOGLE_CLIENT_ID,
-          clientSecret: env.GOOGLE_CLIENT_SECRET,
-          scope: ["openid", "profile", "email"],
-        },
-      },
+          redirectURI: env.LINE_REDIRECT_URI,
+        }),
+      ],
       account: {
         modelName: "AuthAccount",
         updateAccountOnSignIn: false,
@@ -279,103 +251,64 @@ LINE と Google のためにプロバイダーごとの OAuth SDK を追加し�
 - AUTH_TRUSTED_ORIGINS
 - LINE_CLIENT_ID
 - LINE_CLIENT_SECRET
-- GOOGLE_CLIENT_ID
-- GOOGLE_CLIENT_SECRET
+- LINE_REDIRECT_URI
 - DATABASE_URL
 
 client_secret はリクエストパラメータ、Cookie、DB の user/account レコード、URL、アプリケーションログのいずれにも保存しない。サーバー起動時に設定を読み込み、未設定または不正な形式なら起動時に失敗させる。
+
+LINE の issuer は LINE Login の固定値 `https://access.line.me` としてサーバー側の provider 設定に固定する。`LINE_REDIRECT_URI` は `http://localhost:3000/auth/callback/line`（本番では HTTPS の公開 URL）のように、LINE Developers Console の callback URL と完全一致させる。
+
+Google の `GOOGLE_CLIENT_ID` と `GOOGLE_CLIENT_SECRET` は Unit 8 で追加するため、現時点の LINE ログイン起動には不要である。
 
 Better Auth の秘密鍵をローテーションする場合は、旧鍵を短期間だけ検証用に残せる設定を利用する。旧 Cookie を突然すべて無効化するか、段階的に移行するかを運用方針として決め、環境変数を更新する順序を手順化する。
 
 ## Hono への組み込み
 
-### 認証ルートのマウント
+### 認証ルートのマウントと分岐
 
-auth.route.ts は Hono の認証用パスを定義し、auth.controller.ts へ処理を委譲する。route や controller から Better Auth の auth.handler を直接呼び出さない。
+Honoのアプリケーションには、`auth/route.ts`で作成した認証routeを`/auth`へmountする。Better AuthのOAuth/OIDC処理は再実装せず、認証routeでは利用するエンドポイントだけをBetter Auth handlerへ転送する。
 
-    type AuthController = {
-      handle(request: Request): Promise<Response>;
-    };
+    const authRoute = createAuthRoute(auth);
+    app.route('/auth', authRoute);
 
-    export const createAuthRoute = (
-      authController: AuthController,
-    ) => {
-      const app = new Hono();
-      app.all("*", (c) => authController.handle(c.req.raw));
-      return app;
-    };
+`auth/route.ts`の現在のallowlistは次のとおりである。
 
-auth.controller.ts は HandleAuthUseCase を呼び出し、HandleAuthUseCase は IAuthHandler を介して認証処理を実行する。better-auth-handler.ts が IAuthHandler を実装し、その内部で Better Auth の auth.handler を呼び出す。
+    authRoute.post('/sign-in/social', ...);
+    authRoute.on(['GET', 'POST'], '/callback/line', ...);
 
-依存性の組み立ては `src/index.ts` で行う。auth.route.ts は Better Auth や infra の実装を生成しない。
+このため、`/auth/get-session`、`/auth/sign-out`、`/auth/error`などの未登録パスや定義されていないHTTPメソッドはBetter Authへ転送されない。GoogleやBetter Authのpluginを追加する場合は、必要なエンドポイントを`auth/route.ts`へ明示的に追加する。
 
-app.ts では、生成済みの controller を auth.route.ts へ渡すだけにする。
+Hono公式のBetter Auth例では、Better Authが持つ複数のエンドポイントや将来追加されるエンドポイントをまとめて受けるためにwildcardを使用する。この実装では公開経路をコード上で限定することを優先してallowlist方式にしている。そのため、providerやpluginを追加したときは、設定だけでなく`auth/route.ts`の分岐も更新する。
 
-    app.route("/auth", createAuthRoute(authController));
+`POST /auth/sign-in/social`や`/auth/callback/line`は、いずれも`IAuthRequestHandler`を介してBetter Authへ渡す。開始とcallbackの処理をアプリケーション側で分けるusecaseは、独自の前後処理が必要になった時点で追加する。LINE固有のprovider設定、認可URL、ID token検証は`infra/better-auth/line-provider.ts`に閉じ込める。
 
-    const auth = createBetterAuth(prisma);
-    const authHandler = new BetterAuthHandler(auth);
-    const authUseCase = new HandleAuthUseCase(authHandler);
-    const authController = new AuthController(authUseCase);
+セッション取得やログアウトなどのBetter Auth APIは、現状の公開対象に含めない。将来公開する場合は、対象のパスとHTTPメソッドを`auth/route.ts`へ追加する。`better-auth-handler.ts`は`IAuthRequestHandler`を実装し、その内部でBetter Authの`auth.handler`を呼び出す。
+
+Better Authの設定とhandler生成は`auth/auth.ts`のfactoryで行う。依存性の注入は`src/index.ts`で行い、app.tsはBetter Authやinfraの実装を生成せず、生成済みのauthを受け取るだけにする。
+
+    const auth = createAuth(prisma);
 
     const app = createApp({
       db: prisma,
-      authController,
+      auth,
     });
 
-認証ルートには、アプリケーションの通常の JSON バリデーションや認証必須ミドルウェアを重ねない。Better Auth が要求する GET/POST とリクエスト本文をそのまま通す。
+認証ルートには、アプリケーションの通常の JSON バリデーションや認証必須ミドルウェアを重ねない。Better Auth が要求する GET/POST とリクエスト本文をそのまま通す。GET/POST以外のHTTPメソッドは認証handlerへ転送しない。
 
 認証ルートより先に、リクエスト本文を読み捨てるミドルウェアや別の CORS 処理を置かない。フロントエンドとバックエンドが異なる Origin になる場合は、許可する Origin を trustedOrigins と CORS の両方で明示する。ワイルドカードやリクエストの Origin をそのまま反映する設定は使用しない。
-
-### アプリケーション API からのセッション取得
-
-Todo API などの認証必須ルートでは、require-authenticated-user.middleware.ts から GetAuthenticatedUserUseCase を呼び出す。middleware や controller から Better Auth のセッション API を直接呼び出さず、usecase と port 経由で取得する。
-
-    const authenticatedUser =
-      await getAuthenticatedUserUseCase.execute({
-        headers: c.req.raw.headers,
-      });
-
-    if (!authenticatedUser) {
-      return c.json({ message: "Unauthorized" }, 401);
-    }
-
-    c.set("authenticatedUser", authenticatedUser);
-
-GetAuthenticatedUserUseCase は IAuthSessionReader を呼び出し、必要に応じてアプリケーション固有の認証条件を適用する。better-auth-session-reader.ts が IAuthSessionReader を実装し、内部で Better Auth の auth.api.getSession を呼び出す。BetterAuthSessionReader は Better Auth の user/session 型から port で定義した AuthenticatedUser DTO へ変換する。
-
-    export interface IAuthSessionReader {
-      getAuthenticatedUser(params: {
-        headers: Headers;
-      }): Promise<AuthenticatedUser | undefined>;
-    }
-
-    export type AuthenticatedUser = {
-      id: string;
-    }
-
-この port、usecase、middleware は PrismaClient、@prisma/client、Better Auth の user/session 型を参照しない。認証済み user に業務上の属性や権限を追加する場合は、usecase または Todo などの業務ドメイン側で別途定義する。
-
-以下は better-auth-session-reader.ts の内部処理であり、port や controller には置かない。
-
-    const session = await auth.api.getSession({
-      headers: request.headers,
-    });
-
-session が存在しない、期限切れ、失効済みの場合は 401 を返す。セッションの user.id を Todo の userId として利用し、クライアントから送られた userId は採用しない。
-
-認証判定の結果を URL パラメータや hidden field などのクライアント入力から復元しない。
 
 ## ログインフロー
 
 ### 1. ログイン開始
 
-ログイン画面から Better Auth のソーシャルログイン API を呼び出す。provider は固定の allowlist から選び、クライアントが任意の providerId、認可 URL、redirectURI、scope を指定できないようにする。
+ログイン画面から `/auth/sign-in/social` を呼び出す。providerは固定のallowlistから選び、クライアントが任意のproviderId、認可URL、redirectURI、scopeを指定できないようにする。HTTP要求はIAuthRequestHandlerを経由し、provider固有の処理はBetter Authの設定へ委譲する。
 
     await authClient.signIn.social({
       provider: "line",
       callbackURL: "/",
     });
+
+クライアントSDKを使う場合も、SDKの送信先はこのBetter Authの公開APIであり、アプリケーションの開始経路は`POST /auth/sign-in/social`とする。ここで`line`を選択するのはログイン対象を指定するためであり、アプリケーション側にprovider固有のusecaseは作成しない。
 
 サーバー側では Better Auth が次の処理を行う。
 
@@ -403,7 +336,7 @@ DB が利用できる構成では、state の保存戦略は database を基本�
 
 ### 3. コールバック
 
-provider は Better Auth のコールバック URL へ認可コードと state を返す。
+providerはBetter Authの`/auth/callback/:provider`へ認可コードとstateを返す。Honoのcallbackルートはprovider名を固定せず、IAuthRequestHandlerを経由してBetter Authへ渡す。
 
 Better Auth は次の処理を行う。
 
@@ -425,26 +358,28 @@ sequenceDiagram
     participant B as Browser
     participant H as Hono
     participant A as Better Auth
-    participant U as AuthUser / AuthAccount / AuthSession tables (Better Auth)
-    participant V as AuthVerification table (Better Auth)
-    participant P as LINE / Google
+    participant DB as PostgreSQL
+    participant L as LINE
 
-    Note over U,V: Better Auth が自動生成するテーブル（同じ PostgreSQL）
+    Note over DB: Better Auth が自動生成する認証テーブル
+    Note over DB: AuthUser / AuthAccount / AuthSession / AuthVerification
 
-    B->>H: signIn.social(provider)
-    H->>A: auth.handler(Request)
-    A->>V: state / PKCE / nonce を保存
+    B->>H: POST /auth/sign-in/social
+    H->>A: IAuthRequestHandler.handle(Request)
+    A->>A: auth.handler(Request)
+    A->>DB: AuthVerificationへstate / PKCE / nonceを保存
     A-->>B: provider へリダイレクト
-    B->>P: 認可
-    P-->>B: authorization code + state
-    B->>H: callback
-    H->>A: auth.handler(Request)
-    A->>V: state / Cookie / 期限 / 一回性を検証
-    A->>P: code + code_verifier を交換
-    P-->>A: token / ID token / userinfo
-    A->>A: ID token / userinfo を検証
-    A->>U: user + account を transaction で作成または取得
-    A->>U: session を作成
+    B->>L: 認可
+    L-->>B: authorization code + state
+    B->>H: GET /auth/callback/:provider
+    H->>A: IAuthRequestHandler.handle(Request)
+    A->>A: auth.handler(Request)
+    A->>DB: AuthVerificationのstate / Cookie / 期限 / 一回性を検証
+    A->>L: code + code_verifier を交換
+    L-->>A: token / ID token
+    A->>L: ID tokenを公式verify endpointで検証
+    A->>DB: AuthUser + AuthAccountを作成または取得
+    A->>DB: AuthSessionを作成
     A-->>B: session Cookie + redirect
 ```
 
@@ -458,7 +393,11 @@ sequenceDiagram
 
 ### LINE
 
-LINE は Better Auth の LINE provider を使用する。openid、profile、必要な場合だけ email を scope に含める。email が取得できない利用者を、email の有無だけを理由に拒否しない。
+LINE は Better Auth 1.7.2 の標準 LINE provider を、`infra/better-auth/line-provider.ts` の plugin 経由で使用する。providerId は `line`、issuer は `https://access.line.me`、認可・token endpoint は LINE Login v2.1 の固定エンドポイントとする。認可開始時には `openid profile email` を固定 scope として送信し、Better Auth が生成した state、PKCE、nonce を利用する。
+
+LINE の callback では、LINE の ID token verify endpoint が署名を検証した結果に対して、issuer、audience、nonce、有効期限、発行時刻、空でない subject をアプリケーション側でも確認する。検証済みの ID token に email がない場合は、`AuthUser.email` が必須であるためログインを完了しない。LINE Developers Console 側で email permission を有効にする。
+
+`client_secret` は認可 URL、Cookie、AuthAccount、ログへ出さない。LINE の access token、refresh token、ID token は callback 中だけ使用し、account token policy により AuthAccount へ保存しない。provider API をログイン後に呼び出す認可機能は今回実装しない。
 
 LINE の channel が複数ある場合は providerId を固定して別の Generic OAuth provider として登録するなど、認証 ID が衝突しない構成にする。リクエストから channelId を受け取って clientId や clientSecret を動的に切り替えない。
 
@@ -782,7 +721,7 @@ Better Auth の OAuth token 暗号化設定を有効にする場合も、暗号�
 
 ## ID トークンと userinfo の検証
 
-### Better Auth に委譲する検証
+### Better Auth と LINE provider で実施する検証
 
 ID token を JWT として decode しただけで認証成功にしない。Better Auth の provider 設定と OIDC 実装が、少なくとも次の条件を満たすことを採用バージョンで確認する。
 
@@ -796,6 +735,8 @@ ID token を JWT として decode しただけで認証成功にしない。Bett
 - nbf、iat、必要な場合は auth_time を確認する。
 - 認可開始時の nonce と ID token の nonce を照合する。
 - subject が空でなく、許容長を超えないことを確認する。
+
+LINE では、認可コード交換と ID token の署名検証を LINE の公式 verify endpoint に委譲する。`line-provider.ts` は verify endpoint のレスポンスについて issuer を `https://access.line.me`、audience を設定済み `LINE_CLIENT_ID`、nonce を開始時に生成した値と完全一致させ、`exp` が現在時刻より後、`iat` が許容 clock skew 内、`sub` が空でないことを確認する。verify endpoint の呼び出しに失敗した場合や必須 claim が欠ける場合は user、account、session を作成しない。
 
 Generic OAuth では issuer 検証と ID token 検証がデフォルトで有効になる構成を使用する。provider ごとに検証を無効化する設定は、仕様上の理由、代替検証、テストケースが揃わない限り使用しない。
 

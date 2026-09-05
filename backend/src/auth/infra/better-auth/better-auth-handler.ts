@@ -1,10 +1,10 @@
-import type { IAuthHandler } from '../../port/auth-handler.interface.js';
+import type { IAuthRequestHandler } from '../../port/auth-request-handler.interface.js';
 
 type BetterAuthHandlerClient = {
   handler(request: Request): Promise<Response>;
 };
 
-export class BetterAuthHandler implements IAuthHandler {
+export class BetterAuthHandler implements IAuthRequestHandler {
   constructor(private readonly auth: BetterAuthHandlerClient) {}
 
   async handle(request: Request): Promise<Response> {

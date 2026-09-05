@@ -2,6 +2,7 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 
 import { clearAccountTokenFields } from './hooks/account-token-policy.js';
+import { createLineProviderPlugin } from './line-provider.js';
 
 type BetterAuthDatabase = Parameters<typeof prismaAdapter>[0];
 
@@ -18,8 +19,24 @@ const AUTH_COOKIE_ATTRIBUTES = {
 };
 
 export const createBetterAuth = (database: BetterAuthDatabase) => {
-  if (!process.env.BETTER_AUTH_SECRET || !process.env.BETTER_AUTH_URL) {
-    throw new Error('BETTER_AUTH_SECRET, BETTER_AUTH_URL, are required');
+  const {
+    BETTER_AUTH_SECRET,
+    BETTER_AUTH_URL,
+    LINE_CLIENT_ID,
+    LINE_CLIENT_SECRET,
+    LINE_REDIRECT_URI,
+  } = process.env;
+
+  if (
+    !BETTER_AUTH_SECRET ||
+    !BETTER_AUTH_URL ||
+    !LINE_CLIENT_ID ||
+    !LINE_CLIENT_SECRET ||
+    !LINE_REDIRECT_URI
+  ) {
+    throw new Error(
+      'BETTER_AUTH_SECRET, BETTER_AUTH_URL, LINE_CLIENT_ID, LINE_CLIENT_SECRET, and LINE_REDIRECT_URI are required',
+    );
   }
 
   return betterAuth({
@@ -39,6 +56,10 @@ export const createBetterAuth = (database: BetterAuthDatabase) => {
       modelName: 'AuthAccount',
       updateAccountOnSignIn: false,
       storeAccountCookie: false,
+      accountLinking: {
+        enabled: true,
+        disableImplicitLinking: true,
+      },
     },
     verification: {
       modelName: 'AuthVerification',
@@ -69,8 +90,15 @@ export const createBetterAuth = (database: BetterAuthDatabase) => {
         },
       },
     },
-    baseURL: process.env.BETTER_AUTH_URL,
+    plugins: [
+      createLineProviderPlugin({
+        clientId: LINE_CLIENT_ID,
+        clientSecret: LINE_CLIENT_SECRET,
+        redirectURI: LINE_REDIRECT_URI,
+      }),
+    ],
+    baseURL: BETTER_AUTH_URL,
     basePath: '/auth',
-    secret: process.env.BETTER_AUTH_SECRET,
+    secret: BETTER_AUTH_SECRET,
   });
 };
