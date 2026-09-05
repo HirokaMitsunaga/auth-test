@@ -1,21 +1,19 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { swaggerUI } from '@hono/swagger-ui';
-import type { PrismaClient } from '@prisma/client';
+import type { Env, Hono } from 'hono';
 
-import { createAuthRoute } from './auth/route.js';
-import type { IAuthRequestHandler } from './auth/port/auth-request-handler.interface.js';
-import { createTodoCommandApp } from './command/controller/http/todo/todo-command.route.js';
-import { createUserApp } from './command/controller/http/user/user.route.js';
-import { createTodoQueryApp } from './query/controller/http/todo/todo-query.route.js';
-
-type AppDatabase = Pick<PrismaClient, 'todo' | 'user'>;
+type AppRoute = Hono<Env>;
 
 export const createApp = ({
-  db,
-  auth,
+  authRoute,
+  todoCommandRoute,
+  todoQueryRoute,
+  userCommandRoute,
 }: {
-  db: AppDatabase;
-  auth: IAuthRequestHandler;
+  authRoute: AppRoute;
+  todoCommandRoute: AppRoute;
+  todoQueryRoute: AppRoute;
+  userCommandRoute: AppRoute;
 }) => {
   const app = new OpenAPIHono({
     defaultHook: (result, c) => {
@@ -40,15 +38,10 @@ export const createApp = ({
   });
   app.get('/docs', swaggerUI({ url: '/openapi.json' }));
 
-  const authRoute = createAuthRoute(auth);
   app.route('/auth', authRoute);
-
-  const todoCommandApp = createTodoCommandApp({ prisma: db });
-  const todoQueryApp = createTodoQueryApp({ prisma: db });
-  const userApp = createUserApp({ prisma: db });
-  app.route('/todos', todoCommandApp);
-  app.route('/todos', todoQueryApp);
-  app.route('/users', userApp);
+  app.route('/todos', todoCommandRoute);
+  app.route('/todos', todoQueryRoute);
+  app.route('/users', userCommandRoute);
 
   return app;
 };

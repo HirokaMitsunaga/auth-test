@@ -1,7 +1,6 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { createApp } from '../../app.js';
-import { createAuth } from '../auth.js';
+import { createTestApp } from './create-test-app.js';
 import { prisma } from '../../prisma.js';
 
 process.env.BETTER_AUTH_SECRET ??=
@@ -17,8 +16,7 @@ describe('Better Auth 最小構成', () => {
   });
 
   it('【正常系】認証コールバックを/auth配下へ接続できる', async () => {
-    const auth = createAuth(prisma);
-    const app = createApp({ db: prisma, auth });
+    const app = createTestApp(prisma);
 
     const response = await app.request(
       '/auth/callback/line?code=code&state=invalid-state',
@@ -42,8 +40,7 @@ describe('Better Auth 最小構成', () => {
       options: { method: 'GET' },
     },
   ])('【異常系】$description', async ({ path, options }) => {
-    const auth = createAuth(prisma);
-    const app = createApp({ db: prisma, auth });
+    const app = createTestApp(prisma);
 
     const response = await app.request(path, options);
 
