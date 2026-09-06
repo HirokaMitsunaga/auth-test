@@ -15,6 +15,23 @@ describe('Better Auth 最小構成', () => {
     await prisma.$disconnect();
   });
 
+  it.each([
+    ['/auth/line-login-test', 'LINE Login Test'],
+    ['/auth/login-complete', 'LINEログイン成功'],
+    ['/auth/login-error', 'LINEログイン失敗'],
+  ])(
+    '【正常系】開発用LINEログイン画面を表示できる: %s',
+    async (path, title) => {
+      const app = createTestApp(prisma);
+
+      const response = await app.request(path);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/html');
+      expect(await response.text()).toContain(title);
+    },
+  );
+
   it('【正常系】認証コールバックを/auth配下へ接続できる', async () => {
     const app = createTestApp(prisma);
 
