@@ -15,7 +15,6 @@ import { prisma } from '../../prisma.js';
 
 const lineClientId = 'line-test-client-id';
 const lineRedirectURI = 'http://localhost:3000/auth/callback/line';
-const lineEmail = `line-${ulid()}@example.com`.toLowerCase();
 
 type LineClaims = {
   iss: string;
@@ -26,7 +25,6 @@ type LineClaims = {
   nonce?: string;
   name?: string;
   picture?: string;
-  email?: string;
 };
 
 const lineClaims: LineClaims = {
@@ -36,8 +34,9 @@ const lineClaims: LineClaims = {
   exp: Math.floor(Date.now() / 1000) + 300,
   iat: Math.floor(Date.now() / 1000),
   name: 'LINE Test User',
-  email: lineEmail,
 };
+
+const lineEmail = `line-${lineClaims.sub}@example.invalid`;
 
 let verificationClaims: LineClaims = lineClaims;
 let verificationStatus = 200;
@@ -77,7 +76,7 @@ const installLineProvider = () => {
           token_type: 'Bearer',
           expires_in: 3600,
           refresh_token_expires_in: 86400,
-          scope: 'openid profile email',
+          scope: 'openid profile',
         });
       }
 
@@ -131,9 +130,7 @@ const startLineLogin = async (app: ReturnType<typeof createTestApp>) => {
     lineRedirectURI,
   );
   expect(authorizationURL.searchParams.get('response_type')).toBe('code');
-  expect(authorizationURL.searchParams.get('scope')).toBe(
-    'openid profile email',
-  );
+  expect(authorizationURL.searchParams.get('scope')).toBe('openid profile');
   expect(authorizationURL.searchParams.get('code_challenge')).toBeTruthy();
   expect(authorizationURL.searchParams.get('code_challenge_method')).toBe(
     'S256',
@@ -198,7 +195,7 @@ describe('LINE ログイン', () => {
     await prisma.$disconnect();
   });
 
-  it('【正常系】LINEの初回ログインと再ログインができる', async () => {
+  it('【正常系】メールアドレスを取得せずにLINEの初回ログインと再ログインができる', async () => {
     const firstLogin = await startLineLogin(app);
     const firstCallback = await completeLineLogin(app, firstLogin);
 

@@ -237,7 +237,7 @@ createAuthorizationURL: (params) =>
     },
     authorizationEndpoint:
       'https://access.line.me/oauth2/v2.1/authorize',
-    scopes: ['openid', 'profile', 'email'],
+    scopes: ['openid', 'profile'],
     state: params.state,
     codeVerifier: params.codeVerifier,
     redirectURI: params.redirectURI,
@@ -252,7 +252,7 @@ https://access.line.me/oauth2/v2.1/authorize
   ?response_type=code
   &client_id=...
   &redirect_uri=http://localhost:3000/auth/callback/line
-  &scope=openid+profile+email
+  &scope=openid+profile
   &state=...
   &code_challenge=...
   &code_challenge_method=S256
@@ -439,7 +439,7 @@ nonceが開始時のnonceと一致
 return {
   user: {
     name: claims.name ?? '',
-    email: claims.email,
+    email: `line-${claims.sub}@example.invalid`,
     image: claims.picture,
     emailVerified: false,
   },

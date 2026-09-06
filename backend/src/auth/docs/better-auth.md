@@ -393,9 +393,9 @@ sequenceDiagram
 
 ### LINE
 
-LINE は Better Auth 1.7.2 の標準 LINE provider を、`infra/better-auth/line-provider.ts` の plugin 経由で使用する。providerId は `line`、issuer は `https://access.line.me`、認可・token endpoint は LINE Login v2.1 の固定エンドポイントとする。認可開始時には `openid profile email` を固定 scope として送信し、Better Auth が生成した state、PKCE、nonce を利用する。
+LINE は Better Auth 1.7.2 の標準 LINE provider を、`infra/better-auth/line-provider.ts` の plugin 経由で使用する。providerId は `line`、issuer は `https://access.line.me`、認可・token endpoint は LINE Login v2.1 の固定エンドポイントとする。認可開始時には `openid profile` を固定 scope として送信し、Better Auth が生成した state、PKCE、nonce を利用する。メールアドレスは取得しない。
 
-LINE の callback では、LINE の ID token verify endpoint が署名を検証した結果に対して、issuer、audience、nonce、有効期限、発行時刻、空でない subject をアプリケーション側でも確認する。検証済みの ID token に email がない場合は、`AuthUser.email` が必須であるためログインを完了しない。LINE Developers Console 側で email permission を有効にする。
+LINE の callback では、LINE の ID token verify endpoint が署名を検証した結果に対して、issuer、audience、nonce、有効期限、発行時刻、空でない subject をアプリケーション側でも確認する。`AuthUser.email` はBetter Authの必須項目であるため、LINEの `sub` から `line-<sub>@example.invalid` 形式の内部用placeholder emailを生成する。この値は実在の連絡先ではなく、メール送信やメール認証には使用しない。
 
 `client_secret` は認可 URL、Cookie、AuthAccount、ログへ出さない。LINE の access token、refresh token、ID token は callback 中だけ使用し、account token policy により AuthAccount へ保存しない。provider API をログイン後に呼び出す認可機能は今回実装しない。
 
@@ -528,7 +528,7 @@ Better Auth の論理モデルは次のテーブルを基本とする。実際�
 | ------------- | ------------------------------------------------------- |
 | id            | アプリケーション全体で不変なユーザー ID                 |
 | name          | Better Auth の表示名                                    |
-| email         | provider から取得した email。ログイン ID の代替にしない |
+| email         | LINEのsubから生成した内部用placeholder email。連絡先には使用しない |
 | emailVerified | Better Auth が扱う email の検証状態                     |
 | image         | provider 由来の画像。業務データの正本にしない           |
 | createdAt     | 作成日時                                                |

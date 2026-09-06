@@ -23,7 +23,6 @@ const lineIdTokenClaimsSchema = z.object({
   nonce: z.string(),
   name: z.string().optional(),
   picture: z.string().optional(),
-  email: z.string().optional(),
 });
 
 type LineIdTokenClaims = z.infer<typeof lineIdTokenClaimsSchema>;
@@ -97,7 +96,7 @@ export const createLineProviderPlugin = (
     clientSecret: config.clientSecret,
     redirectURI: config.redirectURI,
     disableDefaultScope: true,
-    scope: ['openid', 'profile', 'email'],
+    scope: ['openid', 'profile'],
     // LINE の認可コードフローだけを使用し、クライアントから直接送られる
     // ID token のログイン経路は有効化しない。
     disableIdTokenSignIn: true,
@@ -113,7 +112,7 @@ export const createLineProviderPlugin = (
       return {
         user: {
           name: claims.name ?? '',
-          email: claims.email,
+          email: `line-${claims.sub}@example.invalid`,
           image: claims.picture,
           emailVerified: false,
         },
@@ -141,7 +140,7 @@ export const createLineProviderPlugin = (
           redirectURI: config.redirectURI,
         },
         authorizationEndpoint: 'https://access.line.me/oauth2/v2.1/authorize',
-        scopes: ['openid', 'profile', 'email'],
+        scopes: ['openid', 'profile'],
         state: params.state,
         codeVerifier: params.codeVerifier,
         redirectURI: params.redirectURI,
