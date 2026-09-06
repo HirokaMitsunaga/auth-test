@@ -36,7 +36,7 @@ const lineClaims: LineClaims = {
   name: 'LINE Test User',
 };
 
-const lineEmail = `line-${lineClaims.sub}@example.invalid`;
+const lineEmail = `line-${lineClaims.sub}@example.invalid`.toLowerCase();
 
 let verificationClaims: LineClaims = lineClaims;
 let verificationStatus = 200;
