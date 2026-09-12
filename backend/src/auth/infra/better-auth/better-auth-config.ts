@@ -2,6 +2,7 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 
 import { clearAccountTokenFields } from './hooks/account-token-policy.js';
+import { clearLinePlaceholderEmail } from './hooks/line-user-email-policy.js';
 import { createLineProviderPlugin } from './line-provider.js';
 
 type BetterAuthDatabase = Parameters<typeof prismaAdapter>[0];
@@ -81,6 +82,11 @@ export const createBetterAuth = (database: BetterAuthDatabase) => {
       },
     },
     databaseHooks: {
+      user: {
+        create: {
+          before: clearLinePlaceholderEmail,
+        },
+      },
       account: {
         create: {
           before: clearAccountTokenFields,

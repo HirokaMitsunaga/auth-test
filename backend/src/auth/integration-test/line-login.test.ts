@@ -36,7 +36,10 @@ const lineClaims: LineClaims = {
   name: 'LINE Test User',
 };
 
-const lineEmail = `line-${lineClaims.sub}@example.invalid`.toLowerCase();
+const lineAccountKey = {
+  issuer: 'https://access.line.me',
+  accountId: lineClaims.sub,
+};
 
 let verificationClaims: LineClaims = lineClaims;
 let verificationStatus = 200;
@@ -172,6 +175,21 @@ const completeLineLogin = async (
   return { response, sessionCookie };
 };
 
+const findLineUser = async () => {
+  const account = await prisma.authAccount.findUnique({
+    where: {
+      issuer_accountId: lineAccountKey,
+    },
+    include: {
+      user: {
+        include: { accounts: true, sessions: true },
+      },
+    },
+  });
+
+  return account?.user ?? null;
+};
+
 describe('LINE ログイン', () => {
   const app = createTestApp(prisma);
 
@@ -185,7 +203,10 @@ describe('LINE ログイン', () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    await prisma.authUser.deleteMany({ where: { email: lineEmail } });
+    const lineUser = await findLineUser();
+    if (lineUser) {
+      await prisma.authUser.delete({ where: { id: lineUser.id } });
+    }
     await prisma.authVerification.deleteMany({
       where: { identifier: { in: testStateIdentifiers } },
     });
@@ -207,13 +228,10 @@ describe('LINE ログイン', () => {
     expect(tokenExchangeRequests[0]?.get('redirect_uri')).toBe(lineRedirectURI);
     expect(tokenExchangeRequests[0]?.get('code_verifier')).toBeTruthy();
 
-    const firstUser = await prisma.authUser.findUnique({
-      where: { email: lineEmail },
-      include: { accounts: true, sessions: true },
-    });
+    const firstUser = await findLineUser();
 
     expect(firstUser).toMatchObject({
-      email: lineEmail,
+      email: null,
       name: 'LINE Test User',
       accounts: [
         {
@@ -240,10 +258,7 @@ describe('LINE ログイン', () => {
       'http://localhost:3000/auth/login-complete',
     );
 
-    const userAfterSecondLogin = await prisma.authUser.findUnique({
-      where: { email: lineEmail },
-      include: { accounts: true, sessions: true },
-    });
+    const userAfterSecondLogin = await findLineUser();
     expect(userAfterSecondLogin?.accounts).toHaveLength(1);
     expect(userAfterSecondLogin?.sessions).toHaveLength(2);
   });
@@ -267,9 +282,7 @@ describe('LINE ログイン', () => {
       expect(location.searchParams.get('error')).toBe(
         'unable_to_get_user_info',
       );
-      await expect(
-        prisma.authUser.findUnique({ where: { email: lineEmail } }),
-      ).resolves.toBeNull();
+      await expect(findLineUser()).resolves.toBeNull();
     },
   );
 
@@ -282,9 +295,7 @@ describe('LINE ログイン', () => {
     const location = new URL(callback.response.headers.get('location') ?? '');
     expect(location.pathname).toBe('/auth/login-error');
     expect(location.searchParams.get('error')).toBe('unable_to_get_user_info');
-    await expect(
-      prisma.authUser.findUnique({ where: { email: lineEmail } }),
-    ).resolves.toBeNull();
+    await expect(findLineUser()).resolves.toBeNull();
   });
 
   it('【異常系】LINEコールバックのstateを再利用できない', async () => {

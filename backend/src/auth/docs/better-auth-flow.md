@@ -439,7 +439,7 @@ nonceが開始時のnonceと一致
 return {
   user: {
     name: claims.name ?? '',
-    email: `line-${claims.sub}@example.invalid`,
+    email: `line-${claims.sub}@example.invalid`, // callback通過用の一時値。DB保存前にNULL化する
     image: claims.picture,
     emailVerified: false,
   },

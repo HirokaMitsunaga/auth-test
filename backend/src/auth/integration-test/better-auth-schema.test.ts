@@ -46,4 +46,16 @@ describe('Better Auth スキーマ', () => {
 
     expect(columns).toEqual([{ columnName: 'password', isNullable: 'NO' }]);
   });
+
+  it('【正常系】AuthUser.emailをNULLで保存できる', async () => {
+    const columns = await prisma.$queryRaw<Array<{ isNullable: string }>>`
+      SELECT is_nullable AS "isNullable"
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'AuthUser'
+        AND column_name = 'email'
+    `;
+
+    expect(columns).toEqual([{ isNullable: 'YES' }]);
+  });
 });
