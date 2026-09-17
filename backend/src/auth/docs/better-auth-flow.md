@@ -45,7 +45,7 @@ const app = createApp({
 - Sessionの有効期限
 - Cookie属性
 - account tokenの保存禁止hook
-- LINE provider plugin
+- LINEの標準provider設定
 
 `app.ts` はBetter Authの具体実装を生成せず、生成済みの `IAuthRequestHandler` を認証ルートへ渡すだけにする。
 
@@ -91,7 +91,7 @@ sequenceDiagram
     B->>H: POST /auth/sign-in/social
     H->>A: IAuthRequestHandler.handle(Request)
     A->>A: auth.handler(Request)
-    A->>DB: AuthVerificationへstate / PKCE / nonceを保存
+    A->>DB: AuthVerificationへstate / PKCEを保存
     A-->>B: LINE認証URL + state Cookie
     B->>L: 認証・認可
     L-->>B: authorization code + state
@@ -101,8 +101,7 @@ sequenceDiagram
     A->>DB: AuthVerificationのstateを検証・削除
     A->>L: authorization codeをtokenへ交換
     L-->>A: access token + ID token
-    A->>L: ID tokenを公式verify endpointで検証
-    L-->>A: 検証済みclaims
+    A->>A: 標準LINE Providerがプロフィールを処理
     A->>DB: AuthUser / AuthAccountを作成または取得
     A->>DB: AuthSessionを作成
     A-->>B: session Cookie + callbackURLへredirect
@@ -147,34 +146,35 @@ const provider = socialProviders.find(
 );
 ```
 
-今回の `line` providerは `backend/src/auth/infra/better-auth/line-provider.ts` のpluginから登録される。
+今回の `line` providerは `backend/src/auth/infra/better-auth/better-auth-config.ts` の
+`socialProviders`へ直接登録される。
 
 ```ts
-plugins: [
-  createLineProviderPlugin({
+socialProviders: {
+  line: {
     clientId: LINE_CLIENT_ID,
     clientSecret: LINE_CLIENT_SECRET,
     redirectURI: LINE_REDIRECT_URI,
-  }),
-],
+    disableDefaultScope: true,
+    scope: ['openid', 'profile'],
+    mapProfileToUser: (profile) => ({
+      email: `line-${profile.sub}@example.invalid`,
+    }),
+    disableIdTokenSignIn: true,
+  },
+},
 ```
 
 未登録のproviderが指定された場合、認証URLは生成せずエラーになる。
 
-### 3. state、PKCE、nonceの生成
+### 3. stateとPKCEの生成
 
-LINE providerは `requiresIdTokenNonce: true` なので、Better Authがnonceを生成する。
-
-```ts
-const idTokenNonce = generateIdTokenNonce(provider);
-```
-
-続いてBetter AuthがstateとPKCEの値を生成する。
+Better AuthがstateとPKCEの値を生成する。stateはOAuthコールバックへのCSRF対策、
+PKCEは認可コードインジェクション対策に使用する。
 
 ```ts
 const { state, codeVerifier } = await generateState(c, {
   additionalData: c.body.additionalData,
-  idTokenNonce,
 });
 ```
 
@@ -184,7 +184,6 @@ const { state, codeVerifier } = await generateState(c, {
 {
   callbackURL,
   codeVerifier,
-  idTokenNonce,
   expiresAt,
   oauthState: state,
 }
@@ -197,7 +196,6 @@ identifier: state
 value: JSON.stringify({
   callbackURL,
   codeVerifier,
-  idTokenNonce,
   expiresAt,
   oauthState: state,
 })
@@ -219,31 +217,11 @@ Better Authはproviderの `createAuthorizationURL()` を呼び出す。
 const url = await provider.createAuthorizationURL({
   state,
   codeVerifier,
-  idTokenNonce,
   redirectURI: `${baseURL}/callback/line`,
 });
 ```
 
-LINE providerは認可エンドポイント、scope、state、PKCE、nonceを指定してURLを生成する。
-
-```ts
-createAuthorizationURL: (params) =>
-  createAuthorizationURL({
-    id: 'line',
-    options: {
-      clientId: config.clientId,
-      clientSecret: config.clientSecret,
-      redirectURI: config.redirectURI,
-    },
-    authorizationEndpoint:
-      'https://access.line.me/oauth2/v2.1/authorize',
-    scopes: ['openid', 'profile'],
-    state: params.state,
-    codeVerifier: params.codeVerifier,
-    redirectURI: params.redirectURI,
-    nonce: params.idTokenNonce,
-  }),
-```
+標準LINE Providerが設定済みのscopeに加えて、stateとPKCEを指定してURLを生成する。
 
 生成されるURLの例:
 
@@ -256,7 +234,6 @@ https://access.line.me/oauth2/v2.1/authorize
   &state=...
   &code_challenge=...
   &code_challenge_method=S256
-  &nonce=...
 ```
 
 `client_secret` は認証URLには含まれない。Better Authは認可コードをtokenへ交換するcallback処理でだけ使用する。
@@ -319,7 +296,7 @@ Better Authの `parseState()` が次を行う。
 1. callbackのstateでAuthVerificationを検索
 2. DBに保存したoauthStateとcallbackのstateを比較
 3. 署名付きCookieのstateとcallbackのstateを比較
-4. codeVerifier、callbackURL、idTokenNonceを取り出す
+4. codeVerifier、callbackURLを取り出す
 5. stateの有効期限を確認
 6. state Cookieを削除
 7. AuthVerificationを削除
@@ -333,11 +310,10 @@ Better Authの `parseState()` が次を行う。
 const {
   codeVerifier,
   callbackURL,
-  idTokenNonce,
 } = await parseState(c);
 ```
 
-### 4. providerの解決とnonce確認
+### 4. providerの解決
 
 callback URLの `:id` からproviderを解決する。
 
@@ -353,13 +329,8 @@ const provider = socialProviders.find(
 c.params.id === "line"
 ```
 
-LINE providerはnonce必須なので、stateからnonceを取得できない場合は失敗する。
-
-```ts
-if (provider.requiresIdTokenNonce && !idTokenNonce) {
-  // nonce binding missing
-}
-```
+stateの検証に成功した場合だけ、認可コードの処理へ進む。stateが不正または期限切れの場合は、
+OAuthコールバックへのCSRF攻撃として認証を失敗させる。
 
 ### 5. 認可コードをtokenへ交換
 
@@ -386,65 +357,24 @@ client_secret=...
 
 この段階でLINEからaccess token、ID token、必要に応じてrefresh tokenを受け取る。ただし、今回の用途は認証だけなので、ログイン後にprovider APIを呼び出すためのtokenとしては利用しない。
 
-### 6. ID tokenとユーザー情報の検証
+### 6. ユーザー情報の取得
 
 token交換後、Better Authはproviderの `getUserInfo()` を呼び出す。
 
 ```ts
 const providerResult = await provider.getUserInfo({
   ...tokens,
-  expectedIdTokenNonce: idTokenNonce,
 });
 ```
 
-LINE providerでは `getUserInfo()` を独自実装し、LINE公式verify endpointを呼び出す。
+標準LINE ProviderがID tokenまたはUserInfo endpointからプロフィールを取得し、
+Better Authのuser情報へ変換する。今回のscopeではemailを取得しないため、
+`mapProfileToUser`でcallback通過用のplaceholder emailを設定する。
 
 ```ts
-const claims = await verifyLineIdToken({
-  token: tokens.idToken,
-  clientId: config.clientId,
-  expectedNonce: tokens.expectedIdTokenNonce,
-});
-```
-
-verify endpointへのリクエストは次のとおりである。
-
-```ts
-await fetch('https://api.line.me/oauth2/v2.1/verify', {
-  method: 'POST',
-  body: new URLSearchParams({
-    id_token: params.token,
-    client_id: params.clientId,
-    nonce: params.expectedNonce,
-  }),
-});
-```
-
-LINEから返されたclaimsについて、アプリケーション側でも次を確認する。
-
-```text
-iss === https://access.line.me
-aud === LINE_CLIENT_ID
-subが空でない
-expが現在時刻より未来
-iatが未来すぎない
-nonceが開始時のnonceと一致
-```
-
-署名の検証自体はLINE公式verify endpointの責務である。verify endpointが失敗した場合、またはclaims検証に失敗した場合はuser情報を返さず、Better Authはログインを失敗させる。
-
-検証に成功すると、LINE claimsをBetter Authのuser情報へ変換する。
-
-```ts
-return {
-  user: {
-    name: claims.name ?? '',
-    email: `line-${claims.sub}@example.invalid`, // callback通過用の一時値。DB保存前にNULL化する
-    image: claims.picture,
-    emailVerified: false,
-  },
-  data: claims,
-};
+mapProfileToUser: (profile) => ({
+  email: `line-${profile.sub}@example.invalid`,
+}),
 ```
 
 ### 7. AccountとUserの解決
@@ -453,7 +383,7 @@ Better Authはproviderの情報から外部アカウントの識別子を作る�
 
 ```text
 issuer   = https://access.line.me
-accountId = ID tokenのsub
+accountId = LINEプロフィールのsub
 ```
 
 この組み合わせで `AuthAccount` を検索する。
@@ -496,11 +426,11 @@ Sessionの有効期限は `better-auth-config.ts` の `session.expiresIn` で決
 | Better Authエンドポイントのパス・HTTPメソッド分岐 | `auth/route.ts` |
 | `/auth`への認証routeのmount | `app.ts` |
 | Better AuthへのRequest/Response接続 | `BetterAuthHandler` |
-| OAuth URL、state、PKCE、nonce | Better Auth |
-| LINE認証URLの固定設定 | `line-provider.ts` |
+| OAuth URL生成の共通処理、state（CSRF対策）、PKCE（認可コードインジェクション対策）の生成 | Better Auth |
+| LINE認証URLの固定設定 | 標準LINE Provider |
 | 認可コードからtokenへの交換 | Better AuthのLINE provider |
-| LINE ID tokenの公式verify endpoint呼び出し | `line-provider.ts` |
-| User、Account、Sessionの保存 | Better Auth + Prisma adapter |
+| LINEプロフィールの取得・変換 | 標準LINE Provider + `better-auth-config.ts` |
+| AuthUser、AuthAccount、AuthSessionの保存 | Better Auth + Prisma adapter |
 | Account tokenの保存禁止 | `account-token-policy.ts` |
 
 この構成では、アプリケーション側でOAuthの認証URL生成、callbackのtoken交換、state検証、ID token検証を再実装しない。

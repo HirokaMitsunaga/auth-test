@@ -116,7 +116,7 @@ Unit 3ではBetter AuthのHTTP handler接続までを用意する。保護APIの
 - 本番で secure が無効にならないこと、意図しない domain や path を使わないことを確認する。
 - account 作成・更新時の hook で accessToken、refreshToken、idToken を保存対象から除外する。
 - 今回は認証用途だけなので、ログイン後に provider API を呼び出す認可機能やトークン更新処理は作らない。
-- provider 設定のスナップショット、issuer、client_id、redirect URI など、ID トークン検証に必要な値を実行時に一貫して参照できる形にする。
+- provider のissuer、client_id、redirect URI などの設定値を実行時に一貫して参照できる形にする。
 - secret、認証 Cookie、ID トークン、プロバイダーのクライアントシークレットをログへ出力しない。
 
 完了条件:
@@ -124,9 +124,9 @@ Unit 3ではBetter AuthのHTTP handler接続までを用意する。保護APIの
 - Set-Cookie の全属性をテストで検査できる。
 - account に 3 種類のトークンが保存されないことを確認できる。
 - origin、redirect URI、provider allowlist の拒否条件を確認できる。
-- ID トークンについて issuer、audience、signature、nonce、exp/iat など採用する検証条件が明文化されている。
+- 各providerが返すプロフィールの取得・変換方法と、追加の検証が必要かどうかが明文化されている。
 
-現時点の実装では、`__Host-session` と `__Host-` 系の Cookie 名、`Path=/`、`Secure`、`HttpOnly`、`SameSite=Lax`、Domain 未指定を `infra/better-auth/better-auth-config.ts` に固定している。`AuthAccount` の provider token、期限、scope は `hooks/account-token-policy.ts` の create/update hook で `NULL` にし、`updateAccountOnSignIn` と `storeAccountCookie` も無効化している。provider 固有の issuer、audience、redirect URI、allowlist の設定と検証は、LINE/Google を追加する Unit 5・8 で実装する。
+現時点の実装では、`__Host-session` と `__Host-` 系の Cookie 名、`Path=/`、`Secure`、`HttpOnly`、`SameSite=Lax`、Domain 未指定を `infra/better-auth/better-auth-config.ts` に固定している。`AuthAccount` の provider token、期限、scope は `hooks/account-token-policy.ts` の create/update hook で `NULL` にし、`updateAccountOnSignIn` と `storeAccountCookie` も無効化している。provider 固有のissuer、client_id、redirect URI、scopeは同じ設定ファイルで固定する。
 
 ## 5. LINE のログインを縦に実装
 
@@ -135,8 +135,8 @@ Unit 3ではBetter AuthのHTTP handler接続までを用意する。保護APIの
 実施内容:
 
 - LINE の client_id、client_secret、redirect URI を環境設定から取得する。issuer は LINE Login の固定値 `https://access.line.me` として provider 実装に固定する。
-- Better Auth の LINE provider を plugin で構成し、認証開始、state/nonce、PKCE、コールバック、エラー時の戻り先を実装する。
-- LINE の公式 ID token verify endpoint を利用し、issuer、audience、署名、nonce、有効期限、発行時刻、必須 subject を検証する。
+- Better Auth の標準 LINE provider を設定し、認証開始、state、PKCE、コールバック、エラー時の戻り先を確認する。stateはCSRF対策、PKCEは認可コードインジェクション対策に使用する。
+- LINEのscopeを`openid profile`に固定し、Better Auth 1.7.2のcallbackに必要なplaceholder emailを`mapProfileToUser`で設定する。
 - account の providerId と外部 subject を使って既存ユーザーを特定する。
 - email の一致だけで既存ユーザーへ暗黙リンクしない。リンクは明示操作がある場合だけに限定する。
 - 外部プロバイダーを直接呼ばないテスト用の認証結果を用意し、統合テストを安定させる。
@@ -145,7 +145,7 @@ Unit 3ではBetter AuthのHTTP handler接続までを用意する。保護APIの
 
 - 初回ログインで user、account、session が 1 件ずつ作成される。
 - 2 回目以降は既存 account からログインできる。
-- 不正な state/nonce、issuer、audience、署名、期限の ID トークンを拒否できる。LINE の署名検証は公式 verify endpoint の責務とし、アプリケーションはその検証済みレスポンスの必須 claim も確認する。
+- 不正な stateを拒否でき、認可コード交換に失敗した場合はログインを完了しない。
 - ログアウト後に保護された API が 401 になる。
 
 ## 6. Todo への認証ユーザー連携

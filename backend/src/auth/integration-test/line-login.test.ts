@@ -22,7 +22,6 @@ type LineClaims = {
   aud: string;
   exp: number;
   iat: number;
-  nonce?: string;
   name?: string;
   picture?: string;
 };
@@ -41,8 +40,7 @@ const lineAccountKey = {
   accountId: lineClaims.sub,
 };
 
-let verificationClaims: LineClaims = lineClaims;
-let verificationStatus = 200;
+let lineProfile: LineClaims = lineClaims;
 let tokenExchangeRequests: URLSearchParams[] = [];
 let testStateIdentifiers: string[] = [];
 
@@ -75,7 +73,6 @@ const installLineProvider = () => {
         return jsonResponse({
           access_token: 'line-access-token',
           refresh_token: 'line-refresh-token',
-          id_token: 'line-id-token',
           token_type: 'Bearer',
           expires_in: 3600,
           refresh_token_expires_in: 86400,
@@ -83,15 +80,8 @@ const installLineProvider = () => {
         });
       }
 
-      if (url === 'https://api.line.me/oauth2/v2.1/verify') {
-        const nonce = requestBody.get('nonce') ?? undefined;
-        return jsonResponse(
-          {
-            ...verificationClaims,
-            nonce: verificationClaims.nonce ?? nonce,
-          },
-          verificationStatus,
-        );
+      if (url === 'https://api.line.me/oauth2/v2.1/userinfo') {
+        return jsonResponse(lineProfile);
       }
 
       throw new Error(`Unexpected external request: ${url}`);
@@ -123,7 +113,6 @@ const startLineLogin = async (app: ReturnType<typeof createTestApp>) => {
   const body = (await response.json()) as { url: string; redirect: boolean };
   const authorizationURL = new URL(body.url);
   const state = authorizationURL.searchParams.get('state');
-  const nonce = authorizationURL.searchParams.get('nonce');
 
   expect(body.redirect).toBe(true);
   expect(authorizationURL.origin).toBe('https://access.line.me');
@@ -139,7 +128,7 @@ const startLineLogin = async (app: ReturnType<typeof createTestApp>) => {
     'S256',
   );
   expect(state).toBeTruthy();
-  expect(nonce).toBeTruthy();
+  expect(authorizationURL.searchParams.has('nonce')).toBe(false);
 
   const stateCookie = getCookie(
     response.headers.get('set-cookie') ?? '',
@@ -149,7 +138,6 @@ const startLineLogin = async (app: ReturnType<typeof createTestApp>) => {
 
   return {
     state: state as string,
-    nonce: nonce as string,
     cookieHeader: `__Host-auth.state=${stateCookie.value}`,
   };
 };
@@ -194,8 +182,7 @@ describe('LINE ログイン', () => {
   const app = createTestApp(prisma);
 
   beforeEach(() => {
-    verificationClaims = { ...lineClaims };
-    verificationStatus = 200;
+    lineProfile = { ...lineClaims };
     tokenExchangeRequests = [];
     testStateIdentifiers = [];
     installLineProvider();
@@ -261,41 +248,6 @@ describe('LINE ログイン', () => {
     const userAfterSecondLogin = await findLineUser();
     expect(userAfterSecondLogin?.accounts).toHaveLength(1);
     expect(userAfterSecondLogin?.sessions).toHaveLength(2);
-  });
-
-  it.each([
-    ['issuer', { iss: 'https://invalid.example.com' }],
-    ['audience', { aud: 'another-client-id' }],
-    ['expiry', { exp: Math.floor(Date.now() / 1000) - 1 }],
-    ['subject', { sub: '' }],
-    ['nonce', { nonce: 'invalid-nonce' }],
-  ])(
-    '【異常系】LINE IDトークンの%s検証に失敗した場合はログインを拒否する',
-    async (_condition, override) => {
-      verificationClaims = { ...lineClaims, ...override };
-      const login = await startLineLogin(app);
-      const callback = await completeLineLogin(app, login);
-
-      expect(callback.response.status).toBe(302);
-      const location = new URL(callback.response.headers.get('location') ?? '');
-      expect(location.pathname).toBe('/auth/login-error');
-      expect(location.searchParams.get('error')).toBe(
-        'unable_to_get_user_info',
-      );
-      await expect(findLineUser()).resolves.toBeNull();
-    },
-  );
-
-  it('【異常系】LINEのID token署名検証が失敗した場合はログインを拒否する', async () => {
-    verificationStatus = 400;
-    const login = await startLineLogin(app);
-    const callback = await completeLineLogin(app, login);
-
-    expect(callback.response.status).toBe(302);
-    const location = new URL(callback.response.headers.get('location') ?? '');
-    expect(location.pathname).toBe('/auth/login-error');
-    expect(location.searchParams.get('error')).toBe('unable_to_get_user_info');
-    await expect(findLineUser()).resolves.toBeNull();
   });
 
   it('【異常系】LINEコールバックのstateを再利用できない', async () => {

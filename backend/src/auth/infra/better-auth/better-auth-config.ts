@@ -3,7 +3,6 @@ import { prismaAdapter } from 'better-auth/adapters/prisma';
 
 import { clearAccountTokenFields } from './hooks/account-token-policy.js';
 import { clearLinePlaceholderEmail } from './hooks/line-user-email-policy.js';
-import { createLineProviderPlugin } from './line-provider.js';
 
 type BetterAuthDatabase = Parameters<typeof prismaAdapter>[0];
 
@@ -87,6 +86,8 @@ export const createBetterAuth = (database: BetterAuthDatabase) => {
           before: clearLinePlaceholderEmail,
         },
       },
+      // このアプリケーションではprovider tokenを使用しないため、
+      // AuthAccountにはtokenと関連情報をnullで保存する
       account: {
         create: {
           before: clearAccountTokenFields,
@@ -96,13 +97,22 @@ export const createBetterAuth = (database: BetterAuthDatabase) => {
         },
       },
     },
-    plugins: [
-      createLineProviderPlugin({
+    socialProviders: {
+      line: {
         clientId: LINE_CLIENT_ID,
         clientSecret: LINE_CLIENT_SECRET,
         redirectURI: LINE_REDIRECT_URI,
-      }),
-    ],
+        disableDefaultScope: true,
+        scope: ['openid', 'profile'],
+        // Better Auth 1.7.2のcallbackはemailを必須とするため、
+        // ユーザー作成前のhookでNULLに戻すplaceholderを一時的に渡す。
+        mapProfileToUser: (profile) => ({
+          email: `line-${profile.sub}@example.invalid`,
+        }),
+        // LINEの認可コードフローだけを使用する。
+        disableIdTokenSignIn: true,
+      },
+    },
     baseURL: BETTER_AUTH_URL,
     basePath: '/auth',
     secret: BETTER_AUTH_SECRET,

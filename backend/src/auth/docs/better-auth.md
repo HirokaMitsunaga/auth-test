@@ -4,7 +4,7 @@
 
 LINE Login と Google Login を入口とする認証を Better Auth に委譲し、アプリケーション側では認証済みユーザーを Todo などのドメイン処理へ安全に接続する。
 
-フルスクラッチ実装で必要だった OAuth/OIDC の state、PKCE、nonce、認可コード交換、ID トークン検証、認証 ID の保存、セッション発行を Better Auth の責務とする。そのうえで、次のようなアプリケーション固有のポリシーは本システム側で明示的に管理する。
+フルスクラッチ実装で必要だった OAuth/OIDC の state、PKCE の生成、認可コード交換、認証 ID の保存、セッション発行は Better Auth に委譲する。Providerの設定や、メールアドレスを取得しない場合のplaceholder email変換だけをアプリケーション側で明示的に管理する。
 
 - ログインを許可するプロバイダー
 - アカウントの自動リンクを許可するか
@@ -32,8 +32,8 @@ Better Auth 公式には通常版の Hono 統合ドキュメントと、別URL�
 
 | 領域        | Better Auth に任せる処理                                 | アプリケーション側で決める処理                 |
 | ----------- | -------------------------------------------------------- | ---------------------------------------------- |
-| OAuth/OIDC  | 認可 URL、state、PKCE、nonce、コールバック、トークン交換 | 利用する provider と設定値の管理               |
-| ID トークン | issuer、audience、署名、期限、nonce などの検証           | 検証済みユーザー情報を業務でどう利用するか     |
+| OAuth/OIDC  | state、PKCE の生成、コールバック、トークン交換          | provider の設定                                |
+| ID トークン | 標準Providerが提供するプロフィール取得・変換            | 追加の検証ポリシーが必要かをproviderごとに判断   |
 | 外部 ID     | issuer と accountId による identity の保存               | email だけでの自動リンクを禁止するか           |
 | ユーザー    | Better Auth User の作成・更新                            | 表示名・プロフィール・退会などの業務ルール     |
 | セッション  | セッション発行、Cookie、取得、失効                       | アプリ API での認証必須範囲と認可              |
@@ -57,7 +57,6 @@ Better Auth 固有の設定と、アプリケーション固有の認証利用�
     ├── infra/
     │   └── better-auth/
     │       ├── better-auth-config.ts
-    │       ├── line-provider.ts
     │       ├── better-auth-handler.ts
     │       └── hooks/
     │           ├── account-token-policy.ts
@@ -154,7 +153,7 @@ Better Auth が所有する user、account、session、verification について
 - AuthSession 用のリポジトリ
 - provider ごとの認可コード交換処理
 - provider ごとの JWKS 取得・署名検証処理
-- state、code_verifier、nonce の暗号化処理
+- state、code_verifier の暗号化処理
 
 一方で、プロバイダー設定、Cookie 属性、アカウントリンク方針、外部トークンの保存方針、初回ログイン競合の受け入れ条件は、ライブラリに任せるだけでは仕様にならないため、本設計書で固定する。
 
@@ -177,8 +176,6 @@ Better Auth のバージョンは `package.json` と lockfile で `1.7.2` に固
 配置先は infra/better-auth/better-auth-config.ts とする。このファイルは Better Auth の設定と Prisma adapter の組み立てだけを担当し、認証処理や HTTP レスポンスの処理は持たない。
 
     // 実装: backend/src/auth/infra/better-auth/better-auth-config.ts
-    // createLineProviderPlugin は Better Auth 1.7.2 の LINE provider を
-    // 認可コードフローへ接続し、callback の nonce と ID token 検証を補う。
     export const auth = betterAuth({
       baseURL: env.BETTER_AUTH_URL,
       basePath: "/auth",
@@ -198,13 +195,19 @@ Better Auth のバージョンは `package.json` と lockfile で `1.7.2` に固
       verification: {
         modelName: "AuthVerification",
       },
-      plugins: [
-        createLineProviderPlugin({
+      socialProviders: {
+        line: {
           clientId: env.LINE_CLIENT_ID,
           clientSecret: env.LINE_CLIENT_SECRET,
           redirectURI: env.LINE_REDIRECT_URI,
-        }),
-      ],
+          disableDefaultScope: true,
+          scope: ["openid", "profile"],
+          mapProfileToUser: (profile) => ({
+            email: `line-${profile.sub}@example.invalid`,
+          }),
+          disableIdTokenSignIn: true,
+        },
+      },
       account: {
         modelName: "AuthAccount",
         updateAccountOnSignIn: false,
@@ -280,7 +283,7 @@ Honoのアプリケーションには、`auth/route.ts`で作成した認証rout
 
 Hono公式のBetter Auth例では、Better Authが持つ複数のエンドポイントや将来追加されるエンドポイントをまとめて受けるためにwildcardを使用する。この実装では公開経路をコード上で限定することを優先してallowlist方式にしている。そのため、providerやpluginを追加したときは、設定だけでなく`auth/route.ts`の分岐も更新する。
 
-`POST /auth/sign-in/social`や`/auth/callback/line`は、いずれも`IAuthRequestHandler`を介してBetter Authへ渡す。開始とcallbackの処理をアプリケーション側で分けるusecaseは、独自の前後処理が必要になった時点で追加する。LINE固有のprovider設定、認可URL、ID token検証は`infra/better-auth/line-provider.ts`に閉じ込める。
+`POST /auth/sign-in/social`や`/auth/callback/line`は、いずれも`IAuthRequestHandler`を介してBetter Authへ渡す。開始とcallbackの処理をアプリケーション側で分けるusecaseは、独自の前後処理が必要になった時点で追加する。LINE Providerの設定は`infra/better-auth/better-auth-config.ts`に置き、認証処理自体は標準Providerへ委譲する。
 
 セッション取得やログアウトなどのBetter Auth APIは、現状の公開対象に含めない。将来公開する場合は、対象のパスとHTTPメソッドを`auth/route.ts`へ追加する。`better-auth-handler.ts`は`IAuthRequestHandler`を実装し、その内部でBetter Authの`auth.handler`を呼び出す。
 
@@ -301,7 +304,7 @@ Better Authの設定とhandler生成は`auth/auth.ts`のfactoryで行う。依�
 
 ### 1. ログイン開始
 
-ログイン画面から `/auth/sign-in/social` を呼び出す。providerは固定のallowlistから選び、クライアントが任意のproviderId、認可URL、redirectURI、scopeを指定できないようにする。HTTP要求はIAuthRequestHandlerを経由し、provider固有の処理はBetter Authの設定へ委譲する。
+ログイン画面から `/auth/sign-in/social` を呼び出す。providerは固定のallowlistから選び、クライアントが任意のproviderId、認可URL、redirectURI、scopeを指定できないようにする。HTTP要求はIAuthRequestHandlerを経由し、providerの設定はBetter Authへ渡す。
 
     await authClient.signIn.social({
       provider: "line",
@@ -313,7 +316,7 @@ Better Authの設定とhandler生成は`auth/auth.ts`のfactoryで行う。依�
 サーバー側では Better Auth が次の処理を行う。
 
 1. provider 設定を解決する。
-2. state、PKCE の code_verifier/code_challenge、必要な nonce を生成する。
+2. state、PKCE の code_verifier/code_challenge を生成する。
 3. state 検証用の情報を Better Auth の設定された保存先へ保存する。
 4. state と Cookie の改ざんを検証できる形でブラウザへ渡す。
 5. provider の認可エンドポイントへリダイレクトする。
@@ -329,7 +332,7 @@ DB が利用できる構成では、state の保存戦略は database を基本�
 - redirect_uri は provider 管理画面の設定と完全一致させる。
 - scope は設定ファイルで固定する。
 - PKCE の code_challenge は Better Auth が生成した値を使用する。
-- state と nonce はクライアントから別の値に差し替えられない。
+- state はクライアントから別の値に差し替えられない。
 - provider の URL へ client_secret を送らない。
 
 認可 URL をアプリケーションで組み立てる処理を追加しない。追加のパラメータが必要な provider は、Better Auth の provider 設定または Generic OAuth の拡張点で表現する。
@@ -343,7 +346,7 @@ Better Auth は次の処理を行う。
 1. state と検証用 Cookie、保存済みの state 情報を照合する。
 2. state の期限、利用済み状態、provider を確認する。
 3. code_verifier を使用して認可コードを交換する。
-4. provider の設定に基づいて ID トークンと userinfo を検証する。
+4. provider の設定に基づいて ID トークンまたは userinfo からプロフィールを取得する。
 5. provider の issuer と subject などから account を特定する。
 6. 未登録なら user と account を作成し、既存なら既存 user に紐付ける。
 7. Better Auth の session を作成する。
@@ -367,7 +370,7 @@ sequenceDiagram
     B->>H: POST /auth/sign-in/social
     H->>A: IAuthRequestHandler.handle(Request)
     A->>A: auth.handler(Request)
-    A->>DB: AuthVerificationへstate / PKCE / nonceを保存
+    A->>DB: AuthVerificationへstate / PKCEを保存
     A-->>B: provider へリダイレクト
     B->>L: 認可
     L-->>B: authorization code + state
@@ -376,8 +379,8 @@ sequenceDiagram
     A->>A: auth.handler(Request)
     A->>DB: AuthVerificationのstate / Cookie / 期限 / 一回性を検証
     A->>L: code + code_verifier を交換
-    L-->>A: token / ID token
-    A->>L: ID tokenを公式verify endpointで検証
+    L-->>A: token / ID token / userinfo
+    A->>A: 標準LINE Providerがプロフィールを処理
     A->>DB: AuthUser + AuthAccountを作成または取得
     A->>DB: AuthSessionを作成
     A-->>B: session Cookie + redirect
@@ -393,9 +396,11 @@ sequenceDiagram
 
 ### LINE
 
-LINE は Better Auth 1.7.2 の標準 LINE provider を、`infra/better-auth/line-provider.ts` の plugin 経由で使用する。providerId は `line`、issuer は `https://access.line.me`、認可・token endpoint は LINE Login v2.1 の固定エンドポイントとする。認可開始時には `openid profile` を固定 scope として送信し、Better Auth が生成した state、PKCE、nonce を利用する。メールアドレスは取得しない。
+LINE は Better Auth 1.7.2 の標準 LINE provider を `socialProviders.line` へ直接設定する。providerId は `line`、issuer は `https://access.line.me`、認可・token endpoint は LINE Login v2.1 の固定エンドポイントとする。認可開始時には `openid profile` を固定 scope として送信し、Better Auth が生成した state と PKCE を利用する。stateはOAuthコールバックへのCSRF対策、PKCEは認可コードインジェクション対策として使用する。メールアドレスは取得しない。
 
-LINE の callback では、LINE の ID token verify endpoint が署名を検証した結果に対して、issuer、audience、nonce、有効期限、発行時刻、空でない subject をアプリケーション側でも確認する。Better Auth 1.7.2のcallbackがemailを必須としているため、LINEの `sub` から生成した一時的なplaceholder emailをcallbackへ渡すが、`databaseHooks.user.create.before` で除去し、`AuthUser.email` には `NULL` を保存する。
+LINE の callback では標準ProviderがID tokenまたはUserInfo endpointからプロフィールを取得する。Better Auth 1.7.2のcallbackがemailを必須としているため、`mapProfileToUser`でLINEの `sub` から生成した一時的なplaceholder emailを渡すが、`databaseHooks.user.create.before` で除去し、`AuthUser.email` には `NULL` を保存する。
+
+LINE Providerの設定意図は、[Better AuthでLINEログインを実装する](https://github.com/HirokaMitsunaga/auth-test/blob/main/backend/src/auth/docs/better-auth-config.md) にまとめる。
 
 `client_secret` は認可 URL、Cookie、AuthAccount、ログへ出さない。LINE の access token、refresh token、ID token は callback 中だけ使用し、account token policy により AuthAccount へ保存しない。provider API をログイン後に呼び出す認可機能は今回実装しない。
 
@@ -479,7 +484,7 @@ clientSecret や JWKS の鍵をローテーションする場合、古いログ�
 
 ### state 検証用 Cookie
 
-state、PKCE、nonce を保持する検証用 Cookie は Better Auth が管理する。Better Auth の状態保存を利用するため、アプリケーションが独自に \_\_Host-auth-flow を発行しない。
+state、PKCE を保持する検証用 Cookie は Better Auth が管理する。Better Auth の状態保存を利用するため、アプリケーションが独自に \_\_Host-auth-flow を発行しない。
 
 state 用 Cookie についても、採用バージョンで次の条件を確認する。
 
@@ -562,7 +567,7 @@ Better Auth の provider identity は issuer と accountId の組み合わせで
 - 認証: LINE / Google の認可コード、state、PKCE、ID token または userinfo を使って外部 identity を確認し、Better Auth の user と session を作成する。
 - 認可: provider の access token と refresh token を使って、ログイン後に LINE / Google の API やユーザーリソースへアクセスする。
 
-本システムが今回実装するのは認証だけである。ログイン後に LINE / Google の API を呼び出す認可処理は実装しない。そのため、ID token は callback 中の検証にだけ使用し、access token、refresh token、scope はログイン成功後に必要にならず保存しない。Better Auth の account テーブルには標準 schema として nullable の token 用カラムが残るが、本構成では値を常に NULL とする。
+本システムが今回実装するのは認証だけである。ログイン後に LINE / Google の API を呼び出す認可処理は実装しない。そのため、ID token は callback 中のプロフィール取得にだけ使用し、access token、refresh token、scope はログイン成功後に必要にならず保存しない。Better Auth の account テーブルには標準 schema として nullable の token 用カラムが残るが、本構成では値を常に NULL とする。
 
 将来、LINE / Google の API を呼び出す認可機能を追加する場合は、必要な scope、access token、refresh token の保存可否、暗号化、鍵ローテーションを別の仕様として決める。認証のためだけに token を保存しない。
 
@@ -694,7 +699,7 @@ Better Auth の Prisma adapter は、必要な schema の生成を支援する�
 
 ### 基本方針
 
-ログイン後に LINE や Google の API を呼び出さないため、provider の access token、refresh token、ID token は callback 中だけ使用し、保存しない。access token と refresh token は外部 API に対する認可用であり、今回の認証処理には不要である。ID token は認証検証に使用するが、検証後の session には保持しない。
+ログイン後に LINE や Google の API を呼び出さないため、provider の access token、refresh token、ID token は callback 中だけ使用し、保存しない。access token と refresh token は外部 API に対する認可用であり、今回の認証処理には不要である。ID token はプロフィール取得に使用するが、処理後の session には保持しない。
 
 Better Auth の account モデルは OAuth token を保存できるが、保存できることと保存すべきことは別である。採用バージョンの account 作成・更新フックまたはアダプター拡張で、永続化前に token フィールドを消去し、account レコードには NULL だけが残るようにする。
 
@@ -719,24 +724,11 @@ Better Auth の account モデルは OAuth token を保存できるが、保存�
 
 Better Auth の OAuth token 暗号化設定を有効にする場合も、暗号化されて DB に入る値をアプリケーションのログや管理画面に表示しない。
 
-## ID トークンと userinfo の検証
+## ID トークンと userinfo の扱い
 
-### Better Auth と LINE provider で実施する検証
+### Better Auth と LINE provider に委譲する処理
 
-ID token を JWT として decode しただけで認証成功にしない。Better Auth の provider 設定と OIDC 実装が、少なくとも次の条件を満たすことを採用バージョンで確認する。
-
-- 許可した署名アルゴリズムだけを受け入れる。
-- alg=none や未許可アルゴリズムを拒否する。
-- 信頼した JWKS の鍵で署名を検証する。
-- issuer が設定値と完全一致する。
-- aud に設定済み clientId が含まれる。
-- 複数 audience の場合は azp を確認する。
-- exp を確認し、許容する clock skew を固定する。
-- nbf、iat、必要な場合は auth_time を確認する。
-- 認可開始時の nonce と ID token の nonce を照合する。
-- subject が空でなく、許容長を超えないことを確認する。
-
-LINE では、認可コード交換と ID token の署名検証を LINE の公式 verify endpoint に委譲する。`line-provider.ts` は verify endpoint のレスポンスについて issuer を `https://access.line.me`、audience を設定済み `LINE_CLIENT_ID`、nonce を開始時に生成した値と完全一致させ、`exp` が現在時刻より後、`iat` が許容 clock skew 内、`sub` が空でないことを確認する。verify endpoint の呼び出しに失敗した場合や必須 claim が欠ける場合は user、account、session を作成しない。
+LINEのID tokenまたはUserInfo endpointからのプロフィール取得は、Better Authの標準LINE Providerへ委譲する。アプリケーション側でLINEのverify endpointを呼び出す独自実装は行わない。認可コードフローのCSRF対策にはstate、認可コードインジェクション対策にはPKCEを使用する。
 
 Generic OAuth では issuer 検証と ID token 検証がデフォルトで有効になる構成を使用する。provider ごとに検証を無効化する設定は、仕様上の理由、代替検証、テストケースが揃わない限り使用しない。
 
@@ -753,7 +745,7 @@ Better Auth が検証した issuer と accountId を identity の主キーとし
 
 ### 検証失敗時
 
-署名、issuer、audience、nonce、期限などの検証に失敗した場合は、user や account を作成せず、session も発行しない。外部へは「ログインに失敗しました」などの一般化したエラーを返し、内部ログには provider、失敗した検証種別、request ID だけを出す。token 本文や client_secret は出さない。
+署名、issuer、audience、期限などの検証に失敗した場合は、user や account を作成せず、session も発行しない。外部へは「ログインに失敗しました」などの一般化したエラーを返し、内部ログには provider、失敗した検証種別、request ID だけを出す。token 本文や client_secret は出さない。
 
 ## アカウントリンク方針
 
@@ -933,7 +925,7 @@ Todo の取得・更新・削除では、ID だけを指定して取得した後
 - Better Auth secret
 - access token、refresh token、ID token
 - 認可コード
-- state、nonce、code_verifier
+- state、code_verifier
 - 完全な Cookie ヘッダー
 - authorization URL の query 全体
 
@@ -962,7 +954,7 @@ Todo の取得・更新・削除では、ID だけを指定して取得した後
 10. account token の保存禁止または暗号化保存の方針を実装し、DB を検査する。
 11. 同じ外部 identity の並行初回ログインを実行し、競合時の再取得または明示した再試行が成立することを確認する。
 12. Todo API の userId が session user.id に固定されていることを確認する。
-13. 失効、期限切れ、trustedOrigins 不許可、state 再利用、ID token 検証失敗のテストを実行する。
+13. 失効、期限切れ、trustedOrigins 不許可、state 再利用、providerエラーのテストを実行する。
 14. 不要になったフルスクラッチ認証コードを追加せず、利用しているなら削除範囲を別変更としてレビューする。
 
 ## 実装時のチェックリスト
@@ -986,10 +978,10 @@ Todo の取得・更新・削除では、ID だけを指定して取得した後
 
 ### OAuth/OIDC
 
-- [ ] state、PKCE、nonce を Better Auth に委譲した
+- [ ] state、PKCE を Better Auth に委譲した
 - [ ] state 用 verification の TTL と一回性を確認した
 - [ ] redirectURI の完全一致を確認した
-- [ ] issuer、audience、署名、期限、nonce の検証を確認した
+- [ ] issuer、audience、署名、期限の検証を確認した
 - [ ] 検証前に user、account、session を作成していない
 - [ ] 同じ callback の再送が成功しない
 
@@ -1016,7 +1008,7 @@ Todo の取得・更新・削除では、ID だけを指定して取得した後
 
 - [ ] 不要な provider token を account に保存していない
 - [ ] 保存する場合は暗号化、鍵ローテーション、取得理由を定義した
-- [ ] token、認可コード、state、nonce、code_verifier をログへ出していない
+- [ ] token、認可コード、state、code_verifier をログへ出していない
 - [ ] provider のエラー本文を外部へ返していない
 - [ ] request ID でログイン失敗を追跡できる
 
@@ -1038,7 +1030,6 @@ Todo の取得・更新・削除では、ID だけを指定して取得した後
 - state が期限切れ
 - state が利用済み
 - PKCE 検証に失敗
-- nonce が一致しない
 - issuer が不一致
 - audience または azp が不正
 - 署名アルゴリズムまたは JWKS が不正
