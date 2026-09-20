@@ -1,8 +1,7 @@
 ## はじめに
 
 LINE Loginを使ったユーザー認証をBetter Authで実装してみました。
-実務でOAuthを使った認証をフルスクラッチで実装した経験があるため、
-ライブラリを使うとどの程度実装を簡略化できるのかを確かめるために、本記事を書きました。
+実務でフルスクラッチでOAuthの実装をしたことがあるのですが、ライブラリを使った場合はどれくらい簡略化できるのかとうのが気になり本記事を書きました。
 
 本記事では、Better Authの標準LINE Providerを使い、LINE Loginに必要な設定だけを追加する構成を紹介します。
 具体的な実装は、[GitHubリポジトリ](https://github.com/HirokaMitsunaga/auth-test)に記載しています。また、実際のLINEアカウントを使ったスマホでの実機テスト手順は、[リポジトリのREADME.md](https://github.com/HirokaMitsunaga/auth-test/blob/main/README.md)にまとめています。
@@ -18,6 +17,41 @@ Better Auth公式ブログでは、Auth.jsの保守・運営をBetter Authチー
 そのため、今回はBetter Authを採用しました。
 
 [Auth.js is now part of Better Auth](https://better-auth.com/blog/authjs-joins-better-auth)
+
+## 前提
+
+この記事では、次の前提でLINE Loginを実装します。
+
+- 認可コードインジェクション対策としてPKCEを有効にする
+- `scope`は`openid profile`に限定し、`email`は含めない
+  - `email`を取得しないため、LINEからメールアドレスは返されない。Better Auth 1.7.2のcallbackが要求する値には一時的なplaceholderを渡し、保存前に`NULL`へ戻す
+
+### 実行環境
+
+| 技術          | バージョン |
+| ------------- | ---------- |
+| Hono          | 4.12.31    |
+| Better Auth   | 1.7.2      |
+| Prisma Client | 7.8.0      |
+| Prisma CLI    | 7.8.0      |
+| PostgreSQL    | 18.4       |
+
+### セキュリティ方針
+
+今回の構成で採用している主なセキュリティ対策は次のとおりです。
+OIDCの共通処理はBetter Authに委譲し、Cookieやアカウント連携に関する方針は設定で指定しています。
+
+| 対策    | 防ぐ脅威                   | この構成での実施内容                                                               |
+| ------- | -------------------------- | ---------------------------------------------------------------------------------- |
+| `state` | コールバックへのCSRF攻撃   | ログイン開始時に`state`を生成・保存し、コールバック時に検証する                    |
+| PKCE    | 認可コードインジェクション | `code_verifier`と`code_challenge`を生成し、認可コードをtokenへ交換する際に検証する |
+
+Better Authを使うことで、state、PKCE、認可コード交換、セッション発行など認証で必要な処理を自分で実装せずに済みます。
+
+今回は認可コードインジェクション対策にPKCEを採用しているため、OIDCの`nonce`は扱いません。ただし、PKCEはID tokenの`nonce`検証そのもの
+を代替するものではありません。`nonce`によるID tokenの検証を追加する場合、Better Auth 1.7.2の標準LINE Providerは認可URLへ`nonce`を転
+送しないため、`createAuthorizationURL`などの独自実装が必要です。[標準LINE Providerの実装](https://github.com/better-auth/better-auth
+/blob/v1.7.2/packages/core/src/social-providers/line.ts#L51-L74)
 
 ## 全体の処理の流れ
 
@@ -48,36 +82,9 @@ sequenceDiagram
     A-->>B: Session Cookieを発行
 ```
 
-## Better Authの責務分担
-
-今回の構成では、OAuthの基盤処理とLINE Providerの処理をBetter Authへ委譲し、設定でscopeだけを変更します。
-
-| 処理                                             | 担当        |
-| ------------------------------------------------ | ----------- |
-| `state`の生成・検証（CSRF対策）                    | Better Auth |
-| PKCEの生成・検証（認可コードインジェクション対策） | Better Auth |
-| LINEの認可URL生成・認可コード交換                  | Better Authの標準LINE Provider |
-| LINEプロフィールの取得・Better Auth形式への変換    | Better Authの標準LINE Provider |
-| `AuthUser`、`AuthAccount`、`AuthSession`の作成      | Better Auth |
-
-> Better Authを使うことで、OAuthの基盤処理だけでなくLINE Providerの処理も委譲できます。今回の独自設定は、LINEが要求するscopeを`openid profile`に限定することと、メールアドレスを取得しない場合のplaceholder email変換だけです。
-
-```text
-LINEログイン
-  ├─ OAuth/OIDCの共通処理
-  │    └─ Better Auth
-  └─ LINE Providerの設定
-       └─ backend/src/auth/infra/better-auth/better-auth-config.ts
-```
-
 ## 標準LINE Providerへ設定を追加する
 
-Better Authの標準LINE Providerを直接設定します。`disableDefaultScope`で標準scopeを無効化し、ログインに必要な`openid profile`だけを指定します。
-
-認可コードインジェクションにはPKCE、OAuthコールバックへのCSRF攻撃にはstateで対応します。
-今回のAuthorization Code Flowでは、OIDC上必須ではないnonceは扱いません。
-
-> 注意: nonceを実装する場合、Better Auth 1.7.2の標準LINE Providerは認可URLへnonceを転送しないため、`createAuthorizationURL`の独自実装などが必要になりそうです。[標準LINE Providerの実装](https://github.com/better-auth/better-auth/blob/v1.7.2/packages/core/src/social-providers/line.ts#L51-L74)
+`scope`に`email`を含めないため、LINEからメールアドレスは取得しません。Better Auth 1.7.2のcallbackはメールアドレスを必須としているため、`mapProfileToUser`では一時的なplaceholder emailを渡し、ユーザー作成前のhookで`NULL`へ戻します。placeholderは認証情報として利用せず、実際に保存されるメールアドレスは`NULL`です。
 
 ```ts
 socialProviders: {
@@ -87,28 +94,13 @@ socialProviders: {
     redirectURI: LINE_REDIRECT_URI,
     disableDefaultScope: true,
     scope: ['openid', 'profile'],
+    mapProfileToUser: (profile) => ({
+      email: `line-${profile.sub}@example.invalid`,
+    }),
     disableIdTokenSignIn: true,
   },
 },
 ```
-
-### メールアドレスを取得しない場合
-
-今回のscopeには`email`を含めていないため、LINEからメールアドレスは取得しません。
-Better Auth 1.7.2のcallbackはメールアドレスを必須としているため、実装では`mapProfileToUser`で一時的なplaceholder emailを渡し、ユーザー作成前のhookで`NULL`へ戻します。
-
-```ts
-socialProviders: {
-  line: {
-    // ...
-    mapProfileToUser: (profile) => ({
-      email: `line-${profile.sub}@example.invalid`,
-    }),
-  },
-},
-```
-
-placeholderは認証情報として利用せず、実際に保存されるメールアドレスは`NULL`です。
 
 ## Better Authの設定
 
@@ -130,33 +122,66 @@ Prisma adapterを使用し、Better Authのモデル名は次のように固定�
 - セッションの有効期限はBetter Authの設定で固定する
 - Cookieは`httpOnly`、`secure`、`sameSite: 'lax'`を設定する
 - `__Host-` Cookieを利用するため、`Domain`は指定しない
-- メールアドレス一致による暗黙のアカウントリンクは無効にする
-- ログイン後に利用しないProvider tokenは`AuthAccount`へ保存しない
-
-### Providerの設定値
+- ログイン後にLINE APIを呼び出さないため、Provider tokenは`AuthAccount`へ保存しない
 
 ```ts
-socialProviders: {
-  line: {
-    clientId: LINE_CLIENT_ID,
-    clientSecret: LINE_CLIENT_SECRET,
-    redirectURI: LINE_REDIRECT_URI,
-    disableDefaultScope: true,
-    scope: ['openid', 'profile'],
-    mapProfileToUser: (profile) => ({
-      email: `line-${profile.sub}@example.invalid`,
-    }),
-    disableIdTokenSignIn: true,
-  },
-},
-```
+const AUTH_SESSION_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 7;
+const AUTH_SESSION_UPDATE_AGE_IN_SECONDS = 60 * 60 * 24;
 
-`clientId`、`clientSecret`、`redirectURI`はサーバー側の環境変数から注入し、リクエストから上書きできないようにします。
-`redirectURI`はLINE Developers Consoleの設定と完全一致させます。scopeは`openid profile`に固定し、`email`は要求しません。
+const AUTH_COOKIE_ATTRIBUTES = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'lax' as const,
+  path: '/',
+};
+
+betterAuth({
+  session: {
+    modelName: 'AuthSession',
+    expiresIn: AUTH_SESSION_EXPIRES_IN_SECONDS, // ログイン後のセッション有効期限
+    updateAge: AUTH_SESSION_UPDATE_AGE_IN_SECONDS, // セッション期限を延長する最小間隔
+  },
+  account: {
+    modelName: 'AuthAccount',
+    updateAccountOnSignIn: false, // 再ログイン時にProviderのtoken情報でAuthAccountを更新しない
+    storeAccountCookie: false, // OAuthフロー後にProvider tokenをCookieへ保存しない
+    accountLinking: {
+      enabled: true,
+      disableImplicitLinking: true, // OIDCログイン時の暗黙的なアカウントリンクを無効にする
+    },
+  },
+  advanced: {
+    // __Host- Cookieを使用するため、__Secure-を重ねて付けない。
+    useSecureCookies: false,
+    cookiePrefix: '__Host-auth',
+    defaultCookieAttributes: AUTH_COOKIE_ATTRIBUTES,
+    cookies: {
+      session_token: {
+        name: '__Host-session',
+        attributes: {
+          ...AUTH_COOKIE_ATTRIBUTES,
+          maxAge: AUTH_SESSION_EXPIRES_IN_SECONDS,
+        },
+      },
+    },
+  },
+  databaseHooks: {
+    // ログイン後にLINE APIを呼び出さないため、Provider tokenをAuthAccountへ保存しない。
+    account: {
+      create: {
+        before: clearAccountTokenFields,
+      },
+      update: {
+        before: clearAccountTokenFields,
+      },
+    },
+  },
+});
+```
 
 ## まとめ
 
-Better Authを使うことで、OAuth/OIDC認証で必要になるstate、PKCE、認可コード交換、LINE Providerの処理、セッション発行などを自分で実装せずに済みました。
+Better Authを使うことで、OIDC認証で必要になるstate、PKCE、認可コード交換、LINE Providerの処理、セッション発行などを自分で実装せずに済みました。
 
 今回、アプリケーション側で必要になったのは、LINEのscope設定と、Better Auth 1.7.2のcallbackが要求するemailを一時的に補う設定だけです。
 
