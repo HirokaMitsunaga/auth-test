@@ -117,6 +117,17 @@ Prisma adapterを使用し、Better Authのモデル名は次のように固定�
 `AuthUser`、`AuthAccount`、`AuthSession`、`AuthVerification`をBetter Auth専用のテーブルとして使用します。
 既存の業務テーブルや業務ロジックとは分離し、Better AuthとPrisma adapterに管理を委譲します。
 
+設定しているテーブルの役割は次のとおりです。
+
+| 設定           | テーブル           | 役割                                       |
+| -------------- | ------------------ | ------------------------------------------ |
+| `user`         | `AuthUser`         | Better Authで管理する認証ユーザー          |
+| `session`      | `AuthSession`      | ログイン状態とセッションの有効期限         |
+| `account`      | `AuthAccount`      | LINEなどの外部アカウントとユーザーの紐付け |
+| `verification` | `AuthVerification` | 認証フローで使う一時的な検証データ         |
+
+各テーブルの詳しいカラムや設定については、[Better Auth公式のDatabaseドキュメント](https://better-auth.com/docs/concepts/database#core-schema)を参照してください。
+
 ### セッション・Cookie・アカウント連携
 
 - セッションの有効期限はBetter Authの設定で固定する
