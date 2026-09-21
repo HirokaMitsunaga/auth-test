@@ -81,22 +81,10 @@ npm run dev
 
 ### 4.スマホからログインを開始する
 
-現在のリポジトリにフロントエンド画面がない場合は、スマホで押せるログインボタンを別途用意します。
+PUBLIC_URL+以下のパスにスマホからアクセスする
 
-既存のフロントエンドがある場合は、Better Auth Clientを次のように設定できます。
-
-```ts
-import { createAuthClient } from 'better-auth/client';
-
-const authClient = createAuthClient({
-  baseURL: 'https://example-random.trycloudflare.com/auth',
-});
-
-await authClient.signIn.social({
-  provider: 'line',
-  callbackURL: 'https://example-random.trycloudflare.com/login-complete',
-  errorCallbackURL: 'https://example-random.trycloudflare.com/login-error',
-});
+```
+${PUBLIC_URL}auth/line-login-test"
 ```
 
 重要なのは、ログイン開始からcallbackまでを同じスマホのブラウザーで行うことです。
@@ -141,14 +129,3 @@ callbackURLへリダイレクト
 - `AuthUser`
 - `AuthAccount`
 - `AuthSession`
-
-## よくあるエラー
-
-| エラー                    | 主な原因                                                   |
-| ------------------------- | ---------------------------------------------------------- |
-| `redirect_uri mismatch`   | LINE Consoleと`LINE_REDIRECT_URI`が一致していない          |
-| `state_mismatch`          | PCで開始したURLをスマホで開いた、またはCookieが消えた      |
-| `unable_to_get_user_info` | LINEのIDトークン検証、またはユーザー情報の取得に失敗している |
-| セッションが残らない      | HTTPSではなくHTTPでアクセスしている                        |
-
-この構成ではSession Cookieに`Secure`属性が設定されているため、スマホでの実機テストにはHTTPSが必要です。
